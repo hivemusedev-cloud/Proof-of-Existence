@@ -209,8 +209,7 @@ impl Store {
         let mut file_bytes = payload.clone();
         file_bytes.extend_from_slice(&checksum(&payload, "snapshot"));
         let tmp = self.dir.join("ledger.snapshot.tmp");
-        fs::write(&tmp, &file_bytes)?;
-        File::open(&tmp)?.sync_all()?;
+        write_synced(&tmp, &file_bytes)?;
         fs::rename(&tmp, self.dir.join("ledger.snapshot"))?;
         // Restart the log: the snapshot now carries everything it held.
         self.log = BufWriter::new(
@@ -288,6 +287,16 @@ fn tag_kind(t: u8) -> Option<RegistryKind> {
 }
 
 /// Persist all ten registries (or any subset) to `dir/registries.bin`.
+/// Write bytes and fsync on the SAME writable handle. (Opening the
+/// file read-only afterwards to fsync it works on Linux but is Access
+/// Denied on Windows, where FlushFileBuffers needs write access.)
+fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut f = File::create(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    Ok(())
+}
+
 pub fn save_registries(dir: &Path, regs: &[Registry]) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let mut w = Writer::new();
@@ -309,8 +318,7 @@ pub fn save_registries(dir: &Path, regs: &[Registry]) -> io::Result<()> {
     let mut file_bytes = payload.clone();
     file_bytes.extend_from_slice(&checksum(&payload, "registries"));
     let tmp = dir.join("registries.bin.tmp");
-    fs::write(&tmp, &file_bytes)?;
-    File::open(&tmp)?.sync_all()?;
+    write_synced(&tmp, &file_bytes)?;
     fs::rename(&tmp, dir.join("registries.bin"))?;
     Ok(())
 }

@@ -216,8 +216,14 @@ impl XmssKey {
         buf.extend_from_slice(&self.root());
         let mut tmp: PathBuf = path.to_path_buf();
         tmp.set_extension("tmp");
-        fs::write(&tmp, &buf)?;
-        fs::File::open(&tmp)?.sync_all()?;
+        // Write + fsync on the SAME writable handle. (Opening the file
+        // read-only to fsync it works on Linux but is Access Denied on
+        // Windows, where FlushFileBuffers needs write access.)
+        {
+            let mut f = fs::File::create(&tmp)?;
+            io::Write::write_all(&mut f, &buf)?;
+            f.sync_all()?;
+        }
         fs::rename(&tmp, path)?;
         Ok(())
     }
