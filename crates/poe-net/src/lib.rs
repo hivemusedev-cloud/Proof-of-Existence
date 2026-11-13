@@ -121,6 +121,20 @@ impl NetNode {
     }
 
     pub fn dial(&mut self, addr: Multiaddr) -> Result<(), libp2p::swarm::DialError> {
+        // Never open a second connection to a peer we already reach:
+        // callers re-dial configured peers periodically (a dial fired
+        // while the peer was down must not be lost), and dialing an
+        // address does NOT dedupe against live connections — an
+        // unchecked re-dial loop floods the hub with hundreds of
+        // parallel connections to the same peer and starves it.
+        if let Some(peer) = addr.iter().find_map(|p| match p {
+            libp2p::multiaddr::Protocol::P2p(id) => Some(id),
+            _ => None,
+        }) {
+            if self.swarm.is_connected(&peer) {
+                return Ok(());
+            }
+        }
         self.swarm.dial(addr)
     }
 

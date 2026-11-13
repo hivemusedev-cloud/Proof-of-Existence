@@ -206,8 +206,9 @@ of it waiting.
   written by every node at each close.
 - Chain: `poe-testnet-1`, genesis hash
   `6107532c003ef90c66a1fb1151436803600a7e3600c312b96e6639b4304ab35f9c6776a8dc9994cff8064a5122022a8edc7966956860cfbbd50e4360d4e3de8e`,
-  genesis time 2026-11-13 20:52 +06 (unix 1794581520), 16 rounds per
-  epoch, 3-second rounds, GHOSTDAG k = 3. Spec:
+  16 rounds per epoch, 3-second rounds, GHOSTDAG k = 3. The
+  genesis hash does not depend on the clock; the current t0 and
+  bootstrap identities live in `testnet/TESTNET.md`. Spec:
   `crates/poe-node/testnet-1.spec` (copy in `testnet/`).
 
 ### Live-network corrections (found by running it, 2026-11-13)
@@ -241,15 +242,105 @@ documented at its code site.
    the zero tip no verifier accepts. Heartbeats are now signed in
    the first round where the epoch's last round is final, and closes
    wait one further round so peer heartbeats can arrive.
+5. **Bundle joiners catch up over gossip; restarts resume.** The
+   first live late joiner stalled permanently: its bundle ended at
+   an epoch boundary, the votes for the rounds since had been cast
+   before it came online, and gossip has no memory. Nodes now retain
+   accepted votes and reveals for a bounded window and re-serve the
+   current epoch's history when a new machine registers, so a joiner
+   finalizes the gap in-protocol. And a restarted node restores from
+   the bundle in its own data directory, rejoining at the frontier
+   with its pre-restart rounds marked missed — re-claiming a round
+   it already proposed or voted in could be evidence against itself.
+6. **Windows fsync needs a writable handle** (found on a Windows
+   run, 2026-11-13). XMSS persistence re-opened its temp file
+   read-only to fsync it; Windows refuses to flush a read-only
+   handle (`PermissionDenied`), so no vote key ever persisted
+   there. The same pattern in the store's snapshot and registry
+   writes is fixed the same way.
 
-Acceptance evidence (2026-11-13): three nodes over real libp2p
-finalized 39 of 40 rounds in lockstep and printed identical closes —
-epoch 0: 3 claimants × 100,000, credited 3, state root
-`101456563fc6902d`; epoch 1: root `f7f2160e49a97a53` — reproduced
-across independent runs. A note on epoch 1's zero claimants: that is
-the kernel's own law, not a stall — `Join` is once-ever per machine
-and later claims come from new joins and from renewals after 25
-faithful epochs.
+### Live-network corrections, second night (2026-11-14)
+
+Running the third genesis for hours, under restarts and churn,
+found the next layer — all in the network-facing node, none in the
+kernel or money rules:
+
+7. **Full finality snapshots.** Bundle-only resume rewound a
+   restarted node to the last epoch close and re-marked everything
+   since as missed; worse, a node killed mid-epoch resumed into a
+   stall (its votes for the current epoch existed only in memory).
+   Nodes now persist their complete finality state after every
+   round (`finstate.bin`: committees, reveals, vote store, claims
+   above a floor at the last finalized epoch) and resume from their
+   exact position, re-casting their own votes for unfinalized
+   rounds — the registry makes peers treat them as duplicates,
+   never as second claims.
+8. **Catch-up dwells.** A bundle joiner raced through its gap
+   rounds in milliseconds and closed their committees before peer
+   history arrived — finalizing a solo view an epoch long. A
+   catching-up node now waits, briefly and boundedly, for peer
+   reveals and blocks for a past round before closing its committee
+   or voting in it.
+9. **History retention 2 → 16 epochs**, and announcements now carry
+   the announcer's live position (`sync_hint`), so a joiner asks
+   for — and the network re-serves — the rounds that actually lead
+   to the frontier.
+10. **Canonical-proposal guard.** A sequentially resumed node
+    re-processed rounds it had proposed in before the kill and
+    minted *second, different* blocks for them — manufacturing
+    equivocation evidence against itself and its peers. A node
+    that already holds a canonical proposal for a round re-serves
+    it and never mints another.
+11. **Orphaned-join retry.** The join marker cleared only when the
+    join landed in the ledger; a join proposed in a block that
+    never finalized was therefore never proposed again — a late
+    joiner could wait forever, silently. Once the proposing round
+    is final without the join, the marker clears and a later round
+    re-proposes. (Proven live: epoch 76, `claimants=1`.)
+12. **Mesh hygiene under load.** Three scale bugs in one: votes
+    re-served by history were fully re-verified (XMSS) even when
+    already recorded — a duplicate fast path now answers first,
+    and vote() closes a round's committee on demand when its
+    beacon anchor is already final; the periodic peer re-dial
+    opened a *new* connection every time (160 connections among 4
+    nodes, starving the hub) — dialing now skips connected peers;
+    and history was re-served as the whole retained range every
+    round — it is now walked in slices.
+
+**The open finding — liveness under churn.** Even with all of the
+above, a round whose drawn committee loses a vote (a voter
+crashes, lags an epoch, or votes a different block after late
+delivery) can sit one vote short of finality forever: committees
+are drawn once, votes are one-time claims, and finality is
+sequential. The chain stalled this way at rounds 752, 1084 and
+1231. Recovery today is an operator re-anchor from the last epoch
+bundle — final state is never lost, the unfinalized tail is
+discarded. Whether the protocol itself gains a liveness mechanism
+is a design decision for its authors, not a patch; the full
+account is in `testnet/TESTNET.md` (operations log).
+
+Acceptance evidence: genesis of 2026-11-13 21:14 +06 — three nodes
+over real libp2p finalized in lockstep with identical closes
+(epoch 0: 3 claimants × 100,000, credited 3, root
+`101456563fc6902d`). Current chain (third genesis, 2026-11-14
+00:30 +06): epochs 0–66 identical on three nodes; a mid-epoch
+restart resumed from finstate and kept closing identically; at
+epoch 76 a late joiner's join landed on independent nodes with
+root `d68cda776b23a5c9` (`claimants=1, grant_each=99999`). Full
+workspace suite after all corrections: **67/67 tests pass**
+(2026-11-14). A note on zero-claimant epochs: that is the kernel's
+own law, not a stall — `Join` is once-ever per machine and later
+claims come from new joins and from renewals after 25 faithful
+epochs.
+
+The first genesis (20:52 +06) ran for nine minutes before the
+late-joiner gap in correction 5 was found; the chain was reset
+before any external participation. Two further geneses and four
+clock re-anchors followed on 2026-11-14, all before external
+participation — and none could have had any: the operator's VM
+has no inbound reachability (see `testnet/TESTNET.md`). The
+chain's current position and bootstrap identities are kept
+current in `testnet/TESTNET.md`, not here.
 
 ## Residue (not done, not claimed)
 

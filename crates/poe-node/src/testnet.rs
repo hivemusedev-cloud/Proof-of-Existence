@@ -34,7 +34,7 @@ use poe_finality::{
 };
 use poe_identity::{device_id, Attestation, IdentityRegistry};
 use poe_kernel::ledger::{Ledger, Note, Op};
-use poe_kernel::COIN;
+use poe_kernel::{Spend, COIN};
 use poe_net::{NetNode, TOPIC_ACTS, TOPIC_BLOCKS, TOPIC_VOTES};
 use poe_store::encode::{decode_op, encode_ledger, encode_op, Reader};
 use poe_store::Store;
@@ -488,6 +488,301 @@ pub fn read_bundle(path: &Path) -> io::Result<Bundle> {
     })
 }
 
+// -- per-round local state (restart resume) -----------------------------------
+//
+// The bundle is written at epoch closes and rewinds the store with
+// it. A node's own restart needs finer grain: the finstate file is
+// written at the end of EVERY round and carries the full finality
+// working state plus how far the ledger has applied, so a restarted
+// node resumes exactly where it stopped — its own store is never
+// rewound, and the votes it cast in its last rounds survive in its
+// vote store (and can be re-cast; see run_testnet).
+
+const FINSTATE_MAGIC: &[u8; 8] = b"POEFIN1\0";
+
+fn w_spend(out: &mut Vec<u8>, s: &Spend) {
+    w_u64(out, s.tx);
+    w_u64(out, s.nf);
+}
+
+fn write_finstate(path: &Path, fin: &Finality, next_apply: u64) -> io::Result<()> {
+    let snap = fin.snapshot_full();
+    let base = &snap.base;
+    let mut out = Vec::new();
+    out.extend_from_slice(FINSTATE_MAGIC);
+    w_u64(&mut out, next_apply);
+    w_u64(&mut out, snap.floor_round);
+    w_u64(&mut out, base.k);
+    w_u64(&mut out, base.rounds_per_epoch);
+    w_u32(&mut out, base.dag_blocks.len() as u32);
+    for b in &base.dag_blocks {
+        w_bytes(&mut out, &encode_block(b));
+    }
+    w_u32(&mut out, base.machines.len() as u32);
+    for (id, info) in &base.machines {
+        w_u64(&mut out, *id);
+        out.extend_from_slice(&info.xmss_root);
+        out.extend_from_slice(&info.xmss_height.to_be_bytes());
+        out.extend_from_slice(&info.chain_commitment);
+        w_bytes(&mut out, &info.dsa_public_key);
+    }
+    w_u32(&mut out, base.revoked.len() as u32);
+    for (m, e) in &base.revoked {
+        w_u64(&mut out, *m);
+        w_u64(&mut out, *e);
+    }
+    w_u32(&mut out, base.used_leaves.len() as u32);
+    for (m, leaves) in &base.used_leaves {
+        w_u64(&mut out, *m);
+        w_u32(&mut out, leaves.len() as u32);
+        for l in leaves {
+            w_u64(&mut out, *l);
+        }
+    }
+    w_u32(&mut out, base.finalized.len() as u32);
+    for (r, b) in &base.finalized {
+        w_u64(&mut out, *r);
+        out.extend_from_slice(b);
+    }
+    w_u32(&mut out, snap.committees.len() as u32);
+    for (r, members) in &snap.committees {
+        w_u64(&mut out, *r);
+        w_u32(&mut out, members.len() as u32);
+        for m in members {
+            w_u64(&mut out, *m);
+        }
+    }
+    w_u32(&mut out, snap.reveals.len() as u32);
+    for (r, m, l) in &snap.reveals {
+        w_u64(&mut out, *r);
+        w_u64(&mut out, *m);
+        out.extend_from_slice(l);
+    }
+    w_u32(&mut out, snap.vote_store.len() as u32);
+    for (_, _, v) in &snap.vote_store {
+        w_bytes(&mut out, &encode_vote(v));
+    }
+    w_u32(&mut out, snap.voters.len() as u32);
+    for (r, b, vs) in &snap.voters {
+        w_u64(&mut out, *r);
+        out.extend_from_slice(b);
+        w_u32(&mut out, vs.len() as u32);
+        for m in vs {
+            w_u64(&mut out, *m);
+        }
+    }
+    for canon in [&snap.canonical_prop, &snap.canonical_vote] {
+        w_u32(&mut out, canon.len() as u32);
+        for (m, r, b) in canon {
+            w_u64(&mut out, *m);
+            w_u64(&mut out, *r);
+            out.extend_from_slice(b);
+        }
+    }
+    for regs in [&snap.prop_registries, &snap.vote_registries] {
+        w_u32(&mut out, regs.len() as u32);
+        for (m, heights, accepted, evidence) in regs {
+            w_u64(&mut out, *m);
+            w_u32(&mut out, heights.len() as u32);
+            for h in heights {
+                w_u64(&mut out, *h);
+            }
+            w_u32(&mut out, accepted.len() as u32);
+            for s in accepted {
+                w_spend(&mut out, s);
+            }
+            w_u32(&mut out, evidence.len() as u32);
+            for (a, b) in evidence {
+                w_spend(&mut out, a);
+                w_spend(&mut out, b);
+            }
+        }
+    }
+    for counters in [&snap.owed, &snap.cast] {
+        w_u32(&mut out, counters.len() as u32);
+        for (m, e, n) in counters {
+            w_u64(&mut out, *m);
+            w_u64(&mut out, *e);
+            w_u64(&mut out, *n);
+        }
+    }
+    let tmp = path.with_extension("tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut f, &out)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+fn read_finstate(path: &Path) -> io::Result<(Finality, u64)> {
+    let raw = std::fs::read(path)?;
+    let mut c = Cursor { raw: &raw, off: 0 };
+    if c.take(8)? != FINSTATE_MAGIC {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "not a poe finstate"));
+    }
+    let next_apply = c.u64()?;
+    let floor_round = c.u64()?;
+    let k = c.u64()?;
+    let rpe = c.u64()?;
+    let nb = c.u32()?;
+    let mut dag_blocks = Vec::new();
+    for _ in 0..nb {
+        let b = c.bytes()?;
+        dag_blocks.push(
+            decode_block(&b)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "finstate block"))?,
+        );
+    }
+    let nm = c.u32()?;
+    let mut machines = Vec::new();
+    for _ in 0..nm {
+        let id = c.u64()?;
+        let xmss_root: [u8; 32] = c.take(32)?.try_into().expect("32");
+        let xmss_height = u32::from_be_bytes(c.take(4)?.try_into().expect("4"));
+        let chain_commitment: H512 = c.take(64)?.try_into().expect("64");
+        let dsa_public_key = c.bytes()?;
+        machines.push((id, MachineInfo { xmss_root, xmss_height, chain_commitment, dsa_public_key }));
+    }
+    let nr = c.u32()?;
+    let mut revoked = Vec::new();
+    for _ in 0..nr {
+        revoked.push((c.u64()?, c.u64()?));
+    }
+    let nu = c.u32()?;
+    let mut used_leaves = Vec::new();
+    for _ in 0..nu {
+        let m = c.u64()?;
+        let n = c.u32()?;
+        let mut leaves = Vec::new();
+        for _ in 0..n {
+            leaves.push(c.u64()?);
+        }
+        used_leaves.push((m, leaves));
+    }
+    let nfin = c.u32()?;
+    let mut finalized = Vec::new();
+    for _ in 0..nfin {
+        let r = c.u64()?;
+        let b: H512 = c.take(64)?.try_into().expect("64");
+        finalized.push((r, b));
+    }
+    let nc = c.u32()?;
+    let mut committees = Vec::new();
+    for _ in 0..nc {
+        let r = c.u64()?;
+        let n = c.u32()?;
+        let mut members = Vec::new();
+        for _ in 0..n {
+            members.push(c.u64()?);
+        }
+        committees.push((r, members));
+    }
+    let nrv = c.u32()?;
+    let mut reveals = Vec::new();
+    for _ in 0..nrv {
+        let r = c.u64()?;
+        let m = c.u64()?;
+        let l: H512 = c.take(64)?.try_into().expect("64");
+        reveals.push((r, m, l));
+    }
+    let nvs = c.u32()?;
+    let mut vote_store = Vec::new();
+    for _ in 0..nvs {
+        let b = c.bytes()?;
+        let v = decode_vote(&b)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "finstate vote"))?;
+        vote_store.push((v.machine, v.round, v));
+    }
+    let nvt = c.u32()?;
+    let mut voters = Vec::new();
+    for _ in 0..nvt {
+        let r = c.u64()?;
+        let b: H512 = c.take(64)?.try_into().expect("64");
+        let n = c.u32()?;
+        let mut vs = Vec::new();
+        for _ in 0..n {
+            vs.push(c.u64()?);
+        }
+        voters.push((r, b, vs));
+    }
+    let mut canons = Vec::new();
+    for _ in 0..2 {
+        let n = c.u32()?;
+        let mut entries = Vec::new();
+        for _ in 0..n {
+            let m = c.u64()?;
+            let r = c.u64()?;
+            let b: H512 = c.take(64)?.try_into().expect("64");
+            entries.push((m, r, b));
+        }
+        canons.push(entries);
+    }
+    let mut all_regs = Vec::new();
+    for _ in 0..2 {
+        let n = c.u32()?;
+        let mut regs = Vec::new();
+        for _ in 0..n {
+            let m = c.u64()?;
+            let nh = c.u32()?;
+            let mut heights = Vec::new();
+            for _ in 0..nh {
+                heights.push(c.u64()?);
+            }
+            let na = c.u32()?;
+            let mut accepted = Vec::new();
+            for _ in 0..na {
+                accepted.push(Spend { tx: c.u64()?, nf: c.u64()? });
+            }
+            let ne = c.u32()?;
+            let mut evidence = Vec::new();
+            for _ in 0..ne {
+                let a = Spend { tx: c.u64()?, nf: c.u64()? };
+                let b = Spend { tx: c.u64()?, nf: c.u64()? };
+                evidence.push((a, b));
+            }
+            regs.push((m, heights, accepted, evidence));
+        }
+        all_regs.push(regs);
+    }
+    let mut counters_all = Vec::new();
+    for _ in 0..2 {
+        let n = c.u32()?;
+        let mut entries = Vec::new();
+        for _ in 0..n {
+            entries.push((c.u64()?, c.u64()?, c.u64()?));
+        }
+        counters_all.push(entries);
+    }
+    let mut canons = canons.into_iter();
+    let mut all_regs = all_regs.into_iter();
+    let mut counters_all = counters_all.into_iter();
+    let full = poe_finality::FullSnapshot {
+        base: poe_finality::FinalitySnapshot {
+            k,
+            rounds_per_epoch: rpe,
+            machines,
+            revoked,
+            used_leaves,
+            finalized,
+            dag_blocks,
+        },
+        floor_round,
+        committees,
+        reveals,
+        vote_store,
+        voters,
+        canonical_prop: canons.next().unwrap_or_default(),
+        canonical_vote: canons.next().unwrap_or_default(),
+        prop_registries: all_regs.next().unwrap_or_default(),
+        vote_registries: all_regs.next().unwrap_or_default(),
+        owed: counters_all.next().unwrap_or_default(),
+        cast: counters_all.next().unwrap_or_default(),
+    };
+    Ok((Finality::restore_full(full), next_apply))
+}
+
 // -- the node -----------------------------------------------------------------
 
 pub struct TestnetArgs {
@@ -505,6 +800,10 @@ struct Node {
     store: Store,
     fin: Finality,
     net: NetNode,
+    /// Configured peers, re-dialed periodically: a dial fired while
+    /// the peer is still deriving its keys (or down) is lost, and a
+    /// node that never connects silently runs a solo chain.
+    peer_addrs: Vec<libp2p::Multiaddr>,
     keys: Keys,
     my_announcement: Announcement,
     announcements: BTreeMap<u64, Announcement>,
@@ -519,10 +818,18 @@ struct Node {
     /// machines whose reveals survived, and committees of different
     /// sizes finalize different blocks.
     pending_reveals: HashMap<(u64, u64), H512>,
-    /// My own cast votes by round, kept for nonce-fresh republication
-    /// in later rounds (vote gossip is one-shot; a lost vote is a
-    /// stalled round at small committee sizes).
-    my_votes: HashMap<u64, Vec<u8>>,
+    /// While the current round is below this, the node re-serves the
+    /// current epoch's history (blocks, reveals, accepted votes) every
+    /// round: a peer that synced from an epoch-boundary bundle needs
+    /// exactly that history to finalize the rounds since the bundle,
+    /// and plain gossip has no memory. Set at startup and extended
+    /// whenever a new machine registers.
+    history_until: u64,
+    /// The oldest sync point announced by a recently registered
+    /// machine (from its announcement's sync hint). History
+    /// re-service reaches back to this round's epoch — the joiner's
+    /// clock, not the publisher's.
+    catchup_from: Option<u64>,
     heartbeats: HashMap<(u64, u64), Vec<u8>>,
     hb_signed: HashSet<u64>,
     next_apply: u64,
@@ -537,6 +844,17 @@ struct Node {
     /// missed the reveal collection for it, so it must not act in it.
     observe_until: Option<u64>,
     voted: HashSet<u64>,
+    /// True when this node synced from an epoch bundle (not a plain
+    /// start, not a full local resume). Such a node rebuilds its
+    /// committees for the catch-up rounds from re-served history and
+    /// must give that history time to arrive before closing them —
+    /// see the catch-up dwell in process_round.
+    bundle_synced: bool,
+    /// Next round of the history range to re-serve (see the serve
+    /// block in process_round): serving the whole range every round
+    /// floods the mesh and the publisher; the range is walked in
+    /// slices instead.
+    serve_cursor: u64,
 }
 
 fn attestation_of(a: &Announcement) -> Attestation {
@@ -694,12 +1012,13 @@ impl Node {
 
     fn apply_finalized(&mut self) -> io::Result<()> {
         while let Some(bid) = self.fin.finalized.get(&self.next_apply).copied() {
-            let block = self
-                .fin
-                .dag
-                .get(&bid)
-                .cloned()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "finalized block missing"))?;
+            // A finalized block not yet in the local DAG is a wait,
+            // not a death: it can still arrive (or be re-served), and
+            // the next round retries. Killing the node here turned a
+            // recoverable sync gap into a permanent exit.
+            let Some(block) = self.fin.dag.get(&bid).cloned() else {
+                return Ok(());
+            };
             for op in decode_ops(&block.payload) {
                 let _ = self.engine.apply(self.store.ledger(), &op);
                 self.store.apply(&op)?;
@@ -785,17 +1104,33 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     // sequential round loop replays the missed rounds), not a late
     // joiner. A process actually STARTED after genesis with an empty
     // data dir is still refused: it must sync from a bundle.
-    {
-        let store_dir = args.dir.join("store");
-        let existed = store_dir.join("ledger.snapshot").exists()
-            || std::fs::metadata(store_dir.join("ops.log")).map(|m| m.len() > 0).unwrap_or(false);
-        if args.sync_from.is_none() && !existed && spec.round_at(now_unix()) > 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "this chain has already started and the data dir is empty — start with --sync-from <bundle.bin> from a running node",
-            ));
-        }
+    let store_dir_pre = args.dir.join("store");
+    let store_existed = store_dir_pre.join("ledger.snapshot").exists()
+        || std::fs::metadata(store_dir_pre.join("ops.log")).map(|m| m.len() > 0).unwrap_or(false);
+    if args.sync_from.is_none() && !store_existed && spec.round_at(now_unix()) > 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "this chain has already started and the data dir is empty — start with --sync-from <bundle.bin> from a running node",
+        ));
     }
+    // Restart resume: a node whose data dir holds its own bundle from
+    // a previous run restores from it, exactly like an external sync —
+    // ledger and finality rewind to its last epoch close, and the
+    // epoch-history gossip (see process_round) replays the rounds
+    // since. Without this, a restarted node could never rejoin its
+    // own chain.
+    let own_bundle = args.dir.join("bundle.bin");
+    let self_resume = args.sync_from.is_none() && store_existed && own_bundle.exists();
+    // Finer-grained resume: the per-round finstate (see write_finstate)
+    // takes precedence over the epoch bundle when both exist — the
+    // store is not rewound at all on this path.
+    let finstate_path = args.dir.join("finstate.bin");
+    let full_resume = args.sync_from.is_none() && store_existed && finstate_path.exists();
+    let sync_path: Option<PathBuf> = match &args.sync_from {
+        Some(p) => Some(p.clone()),
+        None if self_resume => Some(own_bundle.clone()),
+        None => None,
+    };
     let bundle0 = build_genesis(&spec.genesis_spec());
     if bundle0.hash != spec.genesis_hash {
         return Err(io::Error::new(
@@ -822,7 +1157,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         machine,
         1_000_000,
     );
-    let my_announcement = Announcement {
+    let mut my_announcement = Announcement {
         device_pk: att.device_pk.clone(),
         root_id: att.root_id,
         serial: att.serial,
@@ -831,14 +1166,16 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         xmss_root: keys.xmss.root(),
         xmss_height: XMSS_HEIGHT,
         chain_commitment: keys.chain.commitment(),
+        sync_hint: 0,
     };
 
     // Store + finality: fresh, or restored from a sync bundle.
     let store_dir = dir.join("store");
-    let store_existed = store_dir.join("ledger.snapshot").exists()
-        || std::fs::metadata(store_dir.join("ops.log")).map(|m| m.len() > 0).unwrap_or(false);
-    let (mut fin, mut next_apply, sync_note) = if let Some(bundle_path) = &args.sync_from {
-        if store_existed {
+    let (mut fin, mut next_apply, sync_note) = if full_resume {
+        let (fin, na) = read_finstate(&finstate_path)?;
+        (fin, na, format!("resumed from local state at round {na}"))
+    } else if let Some(bundle_path) = &sync_path {
+        if args.sync_from.is_some() && store_existed {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "--sync-from given but this data dir already has a store",
@@ -867,6 +1204,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         let _ = fin.dag.insert(genesis);
         (fin, 0, "fresh start".to_string())
     };
+    my_announcement.sync_hint = next_apply;
     let store = Store::open(&store_dir)?;
 
     let mut engine = bundle0.engine;
@@ -877,11 +1215,13 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     // Network.
     let peer_key = load_or_create_peer_key(&dir)?;
     let mut net = NetNode::start(Some(peer_key), &args.listen).await?;
+    let mut peer_addrs: Vec<libp2p::Multiaddr> = Vec::new();
     for p in &args.peers {
         let addr: libp2p::Multiaddr = p
             .parse()
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("bad --peer {p}: {e}")))?;
-        let _ = net.dial(addr);
+        let _ = net.dial(addr.clone());
+        peer_addrs.push(addr);
     }
     let listen_addr = net
         .wait_listen_addr(Duration::from_secs(5))
@@ -893,6 +1233,31 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     println!("LISTEN {listen_addr}");
     println!("START {sync_note}; ledger epoch {} minted {}", store.ledger().now, store.ledger().minted);
 
+    // The first round this process will work on. A fresh node starts
+    // at 0; an externally synced node starts at the bundle's round
+    // (it has never acted, and replays forward). A SELF-resumed node
+    // starts at the wall-clock round instead: it already proposed and
+    // voted in the rounds since its last close, and re-proposing or
+    // re-voting a round it already claimed — possibly for a different
+    // block, from its rewound view — would be evidence against itself
+    // under the one law. It treats those rounds as missed and rejoins
+    // at the frontier.
+    // Resume frontier: a full (finstate) resume processes rounds
+    // SEQUENTIALLY from its apply point — jumping to the wall round
+    // would skip rounds nobody proposed in during a total outage,
+    // and sequential application could never cross them. Its
+    // restored registries and canonical maps make re-processing
+    // safe: rounds it already claimed come back as Duplicates. A
+    // bundle-only resume keeps the wall jump: it has no working
+    // state for the skipped rounds and must not re-claim them.
+    let start_round = if full_resume {
+        next_apply
+    } else if self_resume {
+        next_apply.max(spec.round_at(now_unix()))
+    } else {
+        next_apply
+    };
+    let synced = sync_path.is_some() || full_resume;
     let mut node = Node {
         spec,
         engine,
@@ -900,6 +1265,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         store,
         fin,
         net,
+        peer_addrs,
         keys,
         my_announcement: my_announcement.clone(),
         announcements: BTreeMap::new(),
@@ -907,16 +1273,28 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         buffered_blocks: Vec::new(),
         buffered_votes: Vec::new(),
         pending_reveals: HashMap::new(),
-        my_votes: HashMap::new(),
+        history_until: 0,
+        catchup_from: None,
         heartbeats: HashMap::new(),
         hb_signed: HashSet::new(),
         next_apply,
         last_closed: None,
         join_inflight: None,
         genesis_id,
-        collect_round: if args.sync_from.is_some() { next_apply + 1 } else { 0 },
-        observe_until: if args.sync_from.is_some() { Some(next_apply) } else { None },
-        voted: HashSet::new(),
+        collect_round: if synced { start_round + 1 } else { 0 },
+        observe_until: if synced { Some(start_round) } else { None },
+        bundle_synced: sync_path.is_some(),
+        serve_cursor: 0,
+        // A synced or resumed node must never vote for a round the
+        // bundle already shows final: its target is chosen from its
+        // own DAG view, and a late vote for a different block than
+        // the finalized one is equivocation evidence against itself.
+        voted: if synced { (0..=next_apply).collect() } else { HashSet::new() },
+    };
+    node.history_until = if synced {
+        start_round + 2 * node.spec.rounds_per_epoch
+    } else {
+        node.spec.rounds_per_epoch
     };
     // Register bundle announcements (restores identity bindings), then self.
     for a in take_bundle_announcements() {
@@ -928,6 +1306,35 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         .net
         .publish(TOPIC_ACTS, framed(5, 0, &encode_announcement(&my_announcement)));
 
+    if full_resume {
+        // Rounds I already voted in (per the restored canonical
+        // map) are marked voted: sequential re-processing must not
+        // cast a second, different vote in any of them.
+        for (r, _) in node.fin.canonical_votes(machine) {
+            node.voted.insert(r);
+        }
+        // Re-cast my votes for rounds not yet final. The original
+        // signatures may never have reached a peer before the
+        // restart, and my round loop starts at the frontier, so
+        // those rounds will never be re-processed by me. A re-cast
+        // signs the SAME claim (same block, same round) with a fresh
+        // one-time leaf: at every registry it is a Duplicate, never
+        // evidence — it can only repair, never double-count.
+        let mine = node.fin.canonical_votes(machine);
+        for (round, block) in mine {
+            if round >= node.next_apply && !node.fin.finalized.contains_key(&round) {
+                if let Ok(sig) = node.keys.xmss.sign_persistent(&node.keys.xmss_path, &block) {
+                    let vote = Vote { machine, round, block, sig };
+                    let _ = node.fin.vote(vote.clone());
+                    let _ = node
+                        .net
+                        .publish(TOPIC_VOTES, framed(3, round, &encode_vote(&vote)));
+                    node.voted.insert(round);
+                }
+            }
+        }
+    }
+
     let mut rounds_done: u64 = 0;
     // Rounds are processed strictly in sequence, never skipped: the
     // round a node works on is its own counter, not the wall clock.
@@ -938,7 +1345,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     // entirely on a node whose pre-genesis wait overshot t0: it never
     // closed round 0's committee, never cast round 0's vote, and the
     // chain stalled one vote short of finality forever.
-    let mut next_round = next_apply;
+    let mut next_round = start_round;
     loop {
         let now = now_unix();
         if now < node.spec.t0_unix {
@@ -946,6 +1353,9 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
             // pump events so peers are connected when the chain starts.
             // Nonces are the wall-clock second: each republication is a
             // fresh gossip message, not a suppressed duplicate.
+            for a in node.peer_addrs.clone() {
+                let _ = node.net.dial(a);
+            }
             let _ = node.net.publish(
                 TOPIC_ACTS,
                 framed(5, now, &encode_announcement(&node.my_announcement)),
@@ -1029,6 +1439,12 @@ impl Node {
     ) -> io::Result<()> {
         let rpe = self.spec.rounds_per_epoch;
         let epoch = round / rpe;
+        // Keep configured peers connected (see peer_addrs).
+        if round % 10 == 0 {
+            for a in self.peer_addrs.clone() {
+                let _ = self.net.dial(a);
+            }
+        }
         let start_ms = (self.spec.round_start_unix(round) as u128) * 1000;
         let d_ms = (self.spec.round_secs as u128) * 1000;
         let vote_at = start_ms + d_ms * 45 / 100;
@@ -1037,16 +1453,35 @@ impl Node {
         // that round's reveal collection, so it does not act in it.
         let mut observing = self.observe_until.map(|u| round <= u).unwrap_or(false);
 
+        // Bound the retained history to the last two epochs.
+        self.fin.prune_before(round.saturating_sub(16 * rpe));
         // Registrations land at round boundaries only, so every node
         // samples committees from the same machine set.
         let pending = std::mem::take(&mut self.pending_ann);
+        let mut new_machine = false;
         for a in &pending {
-            self.register_announcement(a, epoch);
+            if self.register_announcement(a, epoch) {
+                new_machine = true;
+                self.catchup_from = Some(match self.catchup_from {
+                    Some(h) => h.min(a.sync_hint),
+                    None => a.sync_hint,
+                });
+            }
         }
-        // Re-announce myself (late joiners learn the machine set this way).
+        if new_machine {
+            // Someone may be catching up from a bundle: re-serve the
+            // epoch history for the next two epochs.
+            self.history_until = self.history_until.max(round + 2 * rpe);
+        }
+        // Re-announce myself (late joiners learn the machine set this
+        // way). The sync hint tracks my CURRENT apply point, so peers
+        // serve history from where I actually am, not from where I
+        // first synced.
+        let mut ann = self.my_announcement.clone();
+        ann.sync_hint = self.next_apply;
         let _ = self
             .net
-            .publish(TOPIC_ACTS, framed(5, round, &encode_announcement(&self.my_announcement)));
+            .publish(TOPIC_ACTS, framed(5, round, &encode_announcement(&ann)));
         // Registrations just landed: submit the reveals that were
         // buffered waiting for them.
         self.flush_reveals();
@@ -1062,13 +1497,44 @@ impl Node {
                     .net
                     .publish(TOPIC_BLOCKS, reveal_msg(self.keys.machine, round, &link, round));
             }
-            for vr in [round.wrapping_sub(1), round.wrapping_sub(2)] {
-                if let Some(body) = self.my_votes.get(&vr).cloned() {
-                    let _ = self.net.publish(TOPIC_VOTES, framed(3, round, &body));
-                }
-            }
             self.pump_until(start_ms + 300).await;
             self.flush_reveals();
+        }
+
+        // Catch-up dwell (bundle-synced nodes only): a round whose
+        // wall-clock window has already passed gets no natural gossip
+        // time, so its committee would close on whatever reveals
+        // happen to be local — usually only this node's — and the
+        // node would finalize a solo fork of the catch-up rounds
+        // before the re-served history lands. Give the history a
+        // bounded chance to arrive: dwell until a peer's reveal for
+        // this round (or a peer's block in it) is in hand.
+        if self.bundle_synced {
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            if round_end <= now_ms {
+                let dwell_end = now_ms + 2500;
+                loop {
+                    let have = self.announcements.keys().any(|m| {
+                        *m != self.keys.machine && self.fin.reveal_of(*m, round).is_some()
+                    }) || self
+                        .fin
+                        .dag
+                        .blocks()
+                        .iter()
+                        .any(|b| b.round == round && b.machine != self.keys.machine);
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    if have || now_ms >= dwell_end {
+                        break;
+                    }
+                    self.pump_until((now_ms + 150).min(dwell_end)).await;
+                }
+            }
         }
 
         // Finality gate: this round's committee and proposer draws are
@@ -1162,6 +1628,58 @@ impl Node {
                 let _ = self.net.publish(TOPIC_BLOCKS, framed(2, round, &encode_block(&b)));
             }
         }
+        // Vote re-service: republish the accepted votes for the last
+        // two rounds (a vote lost in the mesh is a stalled round at
+        // small committee sizes) — and, while a recently joined or
+        // resumed peer may be catching up, the whole current epoch's
+        // history: blocks, reveals and votes for every round of the
+        // epoch so far. A bundle covers a joiner up to the last epoch
+        // close; this covers the rounds since.
+        for vr in [round.wrapping_sub(1), round.wrapping_sub(2)] {
+            for v in self.fin.votes_in_round(vr) {
+                let _ = self.net.publish(TOPIC_VOTES, framed(3, round, &encode_vote(&v)));
+            }
+        }
+        if round < self.history_until {
+            // Serve from the oldest sync point a recent joiner
+            // announced (rounded to its epoch start), clamped to the
+            // retained-history floor — the joiner processes on its
+            // own clock and lags the publisher's by an epoch or two,
+            // so serving only the publisher's current epoch strands
+            // it with subset committees and a solo fork.
+            let floor = round.saturating_sub(16 * rpe);
+            let from = match self.catchup_from {
+                Some(h) => (h - (h % rpe)).max(floor),
+                None => round - (round % rpe),
+            };
+            let machines: Vec<u64> = self.announcements.keys().copied().collect();
+            // Walk the range in slices of 16 rounds per round: the
+            // full range every round is thousands of republishes and
+            // floods slow peers' queues; a joiner cycling the slices
+            // still receives every round within a few rounds.
+            let cur = if self.serve_cursor < from || self.serve_cursor >= round {
+                from
+            } else {
+                self.serve_cursor
+            };
+            let end = (cur + 16).min(round);
+            self.serve_cursor = end;
+            for r in cur..end {
+                for b in self.fin.dag.blocks().into_iter().filter(|b| b.round == r) {
+                    let _ = self.net.publish(TOPIC_BLOCKS, framed(2, round, &encode_block(&b)));
+                }
+                for m in &machines {
+                    if let Some(link) = self.fin.reveal_of(*m, r) {
+                        let _ = self
+                            .net
+                            .publish(TOPIC_BLOCKS, reveal_msg(*m, r, &link, round));
+                    }
+                }
+                for v in self.fin.votes_in_round(r) {
+                    let _ = self.net.publish(TOPIC_VOTES, framed(3, round, &encode_vote(&v)));
+                }
+            }
+        }
 
         if !observing && !self.fin.is_revoked(self.keys.machine) {
             // My reveal for NEXT round, collected during this one.
@@ -1186,6 +1704,19 @@ impl Node {
                     note: Note { cm, nf, asset: COIN, value: 1, born: 0 },
                 });
             }
+            // Re-processing a round I already proposed in (catch-up
+            // after a resume): re-serve the canonical block, never
+            // mint a second one — a different block for the same
+            // (machine, round) claim is equivocation evidence
+            // against me on every peer that kept the first.
+            if let Some(existing) = self.fin.canonical_prop_of(self.keys.machine, round) {
+                if let Some(b) = self.fin.dag.get(&existing).cloned() {
+                    let _ = self
+                        .net
+                        .publish(TOPIC_BLOCKS, framed(2, round, &encode_block(&b)));
+                }
+                // fall through to the vote step without proposing
+            } else {
             let parents = self.fin.dag.tips();
             let block = Block::new(self.keys.machine, round, parents, ops_payload(&ops));
             match self.fin.propose(block.clone()) {
@@ -1200,6 +1731,7 @@ impl Node {
                 Ok(_) => {}
                 Err(_) => {}
             }
+            }
         }
         self.pump_until(vote_at).await;
         // Buffered blocks get another chance now that more of the DAG
@@ -1212,6 +1744,46 @@ impl Node {
         }
         self.flush_reveals();
         self.drain_votes();
+
+        // Catch-up vote settle: on a round whose wall window has
+        // already passed, the previous round's proposals may still
+        // be in flight between peers that are themselves catching
+        // up. Voting on a partial view splits a small committee's
+        // votes across different blocks, and a split round never
+        // finalizes. At the frontier the round's own duration
+        // prevents this; in catch-up, dwell briefly for the
+        // proposals to settle — until blocks from at least two
+        // distinct machines for the target round are in the DAG,
+        // or a bounded time passes.
+        if round >= 1 {
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            if round_end <= now_ms {
+                let target_round = round - 1;
+                let dwell_end = now_ms + 800;
+                loop {
+                    let proposers: HashSet<u64> = self
+                        .fin
+                        .dag
+                        .blocks()
+                        .iter()
+                        .filter(|b| b.round == target_round)
+                        .map(|b| b.machine)
+                        .collect();
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    if proposers.len() >= 2 || now_ms >= dwell_end {
+                        break;
+                    }
+                    self.pump_until((now_ms + 120).min(dwell_end)).await;
+                }
+                self.drain_votes();
+            }
+        }
 
         // My vote — for the PREVIOUS round. The one-round lag means
         // every honest node votes on a converged view of that round's
@@ -1245,7 +1817,6 @@ impl Node {
                             let vote =
                                 Vote { machine: self.keys.machine, round: target_round, block: *target, sig };
                             let body = encode_vote(&vote);
-                            self.my_votes.insert(target_round, body.clone());
                             let _ = self.net.publish(TOPIC_VOTES, framed(3, round, &body));
                             let _ = self.fin.vote(vote);
                         }
@@ -1278,10 +1849,26 @@ impl Node {
             );
         }
 
-        // My join landing check: an inflight join whose round has been
-        // applied without landing is retried in a later block.
-        if let Some(r0) = self.join_inflight {
-            if self.next_apply > r0 {
+        // My join landing check: the inflight marker clears only when
+        // the join is actually IN the ledger. (It used to clear once
+        // the proposing round had been applied locally — on a view
+        // that had diverged, that silently retired a join that had
+        // never landed on the real chain.)
+        if self.join_inflight.is_some()
+            && self.store.ledger().machines.contains(&self.keys.machine)
+        {
+            self.join_inflight = None;
+        }
+        // Orphaned-join retry: if the round that carried my join
+        // proposal is FINAL and the join still isn't in the ledger,
+        // the proposal lost (not the GHOSTDAG winner, or its round's
+        // votes went elsewhere) — clear the marker so a later round
+        // re-proposes. Without this, one lost proposal retired the
+        // join forever (join_inflight only ever cleared on success).
+        if let Some(proposed_at) = self.join_inflight {
+            if self.fin.finalized.contains_key(&proposed_at)
+                && !self.store.ledger().machines.contains(&self.keys.machine)
+            {
                 self.join_inflight = None;
             }
         }
@@ -1298,6 +1885,10 @@ impl Node {
             }
             e += 1;
         }
+        // Persist the full finality state for restart resume. A
+        // failed write only degrades resume freshness (the epoch
+        // bundle remains as fallback), so it never fails the round.
+        let _ = write_finstate(&dir.join("finstate.bin"), &self.fin, self.next_apply);
         Ok(())
     }
 }

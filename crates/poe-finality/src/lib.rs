@@ -96,6 +96,12 @@ pub struct Finality {
     canonical_prop: HashMap<(u64, u64), BlockId>,
     canonical_vote: HashMap<(u64, u64), BlockId>,
     voters: HashMap<(u64, BlockId), HashSet<u64>>,
+    /// Accepted votes, retained so a node can re-serve them: a peer
+    /// that synced from an epoch-boundary bundle still needs the
+    /// current epoch's votes to finalize the rounds since the bundle,
+    /// and gossip has no memory of its own. Bounded by
+    /// [`Finality::prune_before`].
+    vote_store: HashMap<(u64, u64), Vote>,
     used_leaves: HashMap<u64, HashSet<u64>>,
     pub finalized: HashMap<u64, BlockId>,
     pub prop_evidence: Vec<(u64, u64, BlockId, BlockId)>, // machine, round, canonical, offender
@@ -118,6 +124,7 @@ impl Finality {
             canonical_prop: HashMap::new(),
             canonical_vote: HashMap::new(),
             voters: HashMap::new(),
+            vote_store: HashMap::new(),
             used_leaves: HashMap::new(),
             finalized: HashMap::new(),
             prop_evidence: Vec::new(),
@@ -230,6 +237,36 @@ impl Finality {
         self.committees.get(&round).map(|v| v.as_slice())
     }
 
+    /// A machine's revealed ticket link for `round`, if one was
+    /// submitted here. Lets a node re-serve reveals to a peer that
+    /// synced from a bundle and missed the collection window.
+    pub fn reveal_of(&self, machine: u64, round: u64) -> Option<H512> {
+        self.reveals.get(&(round, machine)).copied()
+    }
+
+    /// The accepted votes for `round` retained in the vote store,
+    /// sorted by voter. See `vote_store` for why they are kept.
+    pub fn votes_in_round(&self, round: u64) -> Vec<Vote> {
+        let mut out: Vec<Vote> = self
+            .vote_store
+            .iter()
+            .filter(|((_, r), _)| *r == round)
+            .map(|(_, v)| v.clone())
+            .collect();
+        out.sort_by_key(|v| v.machine);
+        out
+    }
+
+    /// Drop per-round working history (reveals, counted voters,
+    /// stored votes) for rounds before `round`. Callers keep a
+    /// bounded window — the current epoch plus slack — because that
+    /// window is what bundle-synced peers still need re-served.
+    pub fn prune_before(&mut self, round: u64) {
+        self.reveals.retain(|(r, _), _| *r >= round);
+        self.voters.retain(|(r, _), _| *r >= round);
+        self.vote_store.retain(|(_, r), _| *r >= round);
+    }
+
     /// Diagnostic: the votes counted so far for `round`, as
     /// (block, distinct voters), sorted by block id.
     pub fn vote_tally(&self, round: u64) -> Vec<(BlockId, u64)> {
@@ -293,6 +330,18 @@ impl Finality {
         if self.is_revoked(machine) {
             return Err(FinError::Revoked);
         }
+        // A vote can arrive before this node has closed the round's
+        // committee (the close normally happens in the node's own
+        // propose/vote step). If the round's beacon anchor is final
+        // here, the committee is a deterministic function of the
+        // stored reveals — close it now and judge the vote. If the
+        // anchor is not final, closing would sample a divergent
+        // committee: refuse, and the caller buffers the vote.
+        if !self.committees.contains_key(&vote.round)
+            && (vote.round < 2 || self.finalized.contains_key(&vote.round.saturating_sub(2)))
+        {
+            self.close_round_reveals(vote.round);
+        }
         let (is_member, committee_size) = {
             let committee = self.committees.get(&vote.round).ok_or(FinError::RoundNotClosed)?;
             (committee.contains(&machine), committee.len() as u64)
@@ -303,6 +352,20 @@ impl Finality {
         match self.dag.get(&vote.block) {
             Some(b) if b.round == vote.round => {}
             _ => return Err(FinError::UnknownBlock),
+        }
+        // Fast path: a replay of the vote that already won this
+        // claim is a Duplicate — the original was verified when it
+        // was accepted, and a replay carries no new information.
+        // Return before the signature check: re-served history
+        // replays every accepted vote on every burst, and
+        // re-verifying each one throttles a catching-up node below
+        // chain speed.
+        if let Some(reg) = self.vote_regs.get(&machine) {
+            if reg.is_registered(vote.round)
+                && poe_kernel::first_tx(reg.accepted(), vote.round) == side_of(&vote.block)
+            {
+                return Ok(ClaimOutcome::Duplicate);
+            }
         }
         if !xmss::verify(&info.xmss_root, info.xmss_height, &vote.block, &vote.sig) {
             return Err(FinError::BadSignature);
@@ -318,6 +381,7 @@ impl Finality {
         match outcome {
             ClaimOutcome::Accepted => {
                 self.canonical_vote.insert((machine, vote.round), vote.block);
+                self.vote_store.insert((machine, vote.round), vote.clone());
                 self.voters.entry((vote.round, vote.block)).or_default().insert(machine);
                 *self.cast.entry((machine, self.epoch_of(vote.round))).or_insert(0) += 1;
                 let count = self.voters[&(vote.round, vote.block)].len() as u64;
@@ -450,6 +514,11 @@ pub struct Announcement {
     pub xmss_root: H32,
     pub xmss_height: u32,
     pub chain_commitment: H512,
+    /// Unsigned operational hint: the round this node synced from
+    /// (0 for a genesis node). Peers use the smallest hint they have
+    /// seen to know how far back their history re-service must reach
+    /// for a catching-up joiner. Not part of the attestation.
+    pub sync_hint: u64,
 }
 
 pub fn encode_announcement(a: &Announcement) -> Vec<u8> {
@@ -464,6 +533,7 @@ pub fn encode_announcement(a: &Announcement) -> Vec<u8> {
     out.extend_from_slice(&a.xmss_root);
     out.extend_from_slice(&a.xmss_height.to_be_bytes());
     out.extend_from_slice(&a.chain_commitment);
+    put_u64(&mut out, a.sync_hint);
     out
 }
 
@@ -485,6 +555,8 @@ pub fn decode_announcement(raw: &[u8]) -> Option<Announcement> {
     let xmss_root: H32 = r.take(32)?.try_into().ok()?;
     let xmss_height = u32::from_be_bytes(r.take(4)?.try_into().ok()?);
     let chain_commitment: H512 = r.take(64)?.try_into().ok()?;
+    // Trailing hint added after the first wire version; absent = 0.
+    let sync_hint = r.u64().unwrap_or(0);
     Some(Announcement {
         device_pk,
         root_id,
@@ -494,6 +566,7 @@ pub fn decode_announcement(raw: &[u8]) -> Option<Announcement> {
         xmss_root,
         xmss_height,
         chain_commitment,
+        sync_hint,
     })
 }
 
@@ -514,6 +587,32 @@ pub struct FinalitySnapshot {
     pub used_leaves: Vec<(u64, Vec<u64>)>,
     pub finalized: Vec<(u64, BlockId)>,
     pub dag_blocks: Vec<Block>,
+}
+
+/// The base snapshot PLUS the live working state (committees,
+/// reveals, retained votes, claim registries, vote counters) for
+/// recent rounds. A bundle joiner does not need this — it rebuilds
+/// working state from gossip — but a RESTARTED node does: without
+/// it, the votes cast since the last epoch close exist nowhere once
+/// every voter has restarted, and the frontier rounds can never
+/// finalize. Written per-round to the node's own state file, never
+/// shared. Working maps are filtered to rounds at or after
+/// `floor_round` (the last finalized epoch's start): older working
+/// state is dead — its rounds are final and their committees never
+/// re-open.
+pub struct FullSnapshot {
+    pub base: FinalitySnapshot,
+    pub floor_round: u64,
+    pub committees: Vec<(u64, Vec<u64>)>,
+    pub reveals: Vec<(u64, u64, H512)>,
+    pub vote_store: Vec<(u64, u64, Vote)>,
+    pub voters: Vec<(u64, BlockId, Vec<u64>)>,
+    pub canonical_prop: Vec<(u64, u64, BlockId)>,
+    pub canonical_vote: Vec<(u64, u64, BlockId)>,
+    pub prop_registries: Vec<(u64, Vec<u64>, Vec<Spend>, Vec<(Spend, Spend)>)>,
+    pub vote_registries: Vec<(u64, Vec<u64>, Vec<Spend>, Vec<(Spend, Spend)>)>,
+    pub owed: Vec<(u64, u64, u64)>,
+    pub cast: Vec<(u64, u64, u64)>,
 }
 
 impl Finality {
@@ -539,8 +638,18 @@ impl Finality {
 
     pub fn restore(snap: FinalitySnapshot) -> Finality {
         let mut fin = Finality::new(snap.k, snap.rounds_per_epoch);
-        for b in snap.dag_blocks {
-            let _ = fin.dag.insert(b);
+        // Insert in causal order, not snapshot order: a block may
+        // parent a same-round block, so the snapshot's (round, id)
+        // sort can list a child before its parent, and a single pass
+        // would silently drop the child — including, fatally, a
+        // finalized one. Repeat passes until nothing more fits.
+        let mut pending = snap.dag_blocks;
+        loop {
+            let before = pending.len();
+            pending.retain(|b| fin.dag.insert(b.clone()).is_err());
+            if pending.is_empty() || pending.len() == before {
+                break;
+            }
         }
         for (id, info) in snap.machines {
             fin.register_machine(id, info);
@@ -555,5 +664,149 @@ impl Finality {
             fin.finalized.insert(r, b);
         }
         fin
+    }
+
+    /// Snapshot including the live working state (see
+    /// [`FullSnapshot`]). The floor is the last finalized round's
+    /// epoch start.
+    pub fn snapshot_full(&self) -> FullSnapshot {
+        let rpe = self.rounds_per_epoch.max(1);
+        let last_final = self.finalized.keys().max().copied().unwrap_or(0);
+        let floor = (last_final / rpe) * rpe;
+        let reg = |regs: &HashMap<u64, Registry>| -> Vec<(u64, Vec<u64>, Vec<Spend>, Vec<(Spend, Spend)>)> {
+            regs.iter()
+                .map(|(m, r)| {
+                    let pairs: Vec<(u64, Spend)> = r
+                        .heights()
+                        .iter()
+                        .copied()
+                        .zip(r.accepted().iter().copied())
+                        .filter(|(_, s)| s.nf >= floor)
+                        .collect();
+                    (
+                        *m,
+                        pairs.iter().map(|(h, _)| *h).collect(),
+                        pairs.iter().map(|(_, s)| *s).collect(),
+                        r.evidence()
+                            .iter()
+                            .copied()
+                            .filter(|(a, _)| a.nf >= floor)
+                            .collect(),
+                    )
+                })
+                .collect()
+        };
+        FullSnapshot {
+            base: self.snapshot(),
+            floor_round: floor,
+            committees: self
+                .committees
+                .iter()
+                .filter(|(r, _)| **r >= floor)
+                .map(|(r, c)| (*r, c.clone()))
+                .collect(),
+            reveals: self
+                .reveals
+                .iter()
+                .filter(|((r, _), _)| *r >= floor)
+                .map(|((r, m), l)| (*r, *m, *l))
+                .collect(),
+            vote_store: self
+                .vote_store
+                .iter()
+                .filter(|((_, r), _)| *r >= floor)
+                .map(|((m, r), v)| (*m, *r, v.clone()))
+                .collect(),
+            voters: self
+                .voters
+                .iter()
+                .filter(|((r, _), _)| *r >= floor)
+                .map(|((r, b), s)| (*r, *b, s.iter().copied().collect()))
+                .collect(),
+            canonical_prop: self
+                .canonical_prop
+                .iter()
+                .filter(|((_, r), _)| *r >= floor)
+                .map(|((m, r), b)| (*m, *r, *b))
+                .collect(),
+            canonical_vote: self
+                .canonical_vote
+                .iter()
+                .filter(|((_, r), _)| *r >= floor)
+                .map(|((m, r), b)| (*m, *r, *b))
+                .collect(),
+            prop_registries: reg(&self.prop_regs),
+            vote_registries: reg(&self.vote_regs),
+            owed: self
+                .owed
+                .iter()
+                .map(|((m, e), n)| (*m, *e, *n))
+                .collect(),
+            cast: self
+                .cast
+                .iter()
+                .map(|((m, e), n)| (*m, *e, *n))
+                .collect(),
+        }
+    }
+
+    /// Restore from a full snapshot: the base restore, with the
+    /// working state overwritten by the snapshot's.
+    pub fn restore_full(snap: FullSnapshot) -> Finality {
+        let mut fin = Finality::restore(snap.base);
+        for (r, c) in snap.committees {
+            fin.committees.insert(r, c);
+        }
+        for (r, m, l) in snap.reveals {
+            fin.reveals.insert((r, m), l);
+        }
+        for (m, r, v) in snap.vote_store {
+            fin.vote_store.insert((m, r), v);
+        }
+        for (r, b, s) in snap.voters {
+            fin.voters.insert((r, b), s.into_iter().collect());
+        }
+        for (m, r, b) in snap.canonical_prop {
+            fin.canonical_prop.insert((m, r), b);
+        }
+        for (m, r, b) in snap.canonical_vote {
+            fin.canonical_vote.insert((m, r), b);
+        }
+        for (m, h, a, e) in snap.prop_registries {
+            fin.prop_regs.insert(m, Registry::restore(RegistryKind::Proposal, h, a, e));
+        }
+        for (m, h, a, e) in snap.vote_registries {
+            fin.vote_regs.insert(m, Registry::restore(RegistryKind::Vote, h, a, e));
+        }
+        for (m, e, n) in snap.owed {
+            fin.owed.insert((m, e), n);
+        }
+        for (m, e, n) in snap.cast {
+            fin.cast.insert((m, e), n);
+        }
+        fin
+    }
+
+    /// The block this machine canonically proposed for `round`, if
+    /// any — a node re-processing a round (catch-up, resume) must
+    /// re-serve THIS block, never mint a second one: a second,
+    /// different proposal for the same round is equivocation
+    /// evidence against itself.
+    pub fn canonical_prop_of(&self, machine: u64, round: u64) -> Option<BlockId> {
+        self.canonical_prop.get(&(machine, round)).copied()
+    }
+
+    /// The blocks this machine has canonically voted for, by round —
+    /// used by a resumed node to re-cast votes its restart would
+    /// otherwise strand.
+    pub fn canonical_votes(&self, machine: u64) -> Vec<(u64, BlockId)> {
+        let mut out: Vec<(u64, BlockId)> = self
+            .canonical_vote
+            .iter()
+            .filter(|((m, _), _)| *m == machine)
+            .map(|((_, r), b)| (*r, *b))
+            .collect();
+        out.sort();
+        out
     }
 }

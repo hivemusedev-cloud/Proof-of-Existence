@@ -16,7 +16,7 @@ here makes the protocol stronger before any mainnet exists.
 |---|---|
 | Name | `poe-testnet-1` |
 | Genesis hash | `6107532c003ef90c66a1fb1151436803600a7e3600c312b96e6639b4304ab35f9c6776a8dc9994cff8064a5122022a8edc7966956860cfbbd50e4360d4e3de8e` |
-| Genesis time (t0) | 2026-11-13 20:52:00 Asia/Dhaka (+06) (unix `1794581520`) |
+| Genesis time (t0) | originally 2026-11-14 00:30:00 Asia/Dhaka (+06) (unix `1794594600`); the operator has since re-anchored the clock at epoch boundaries after liveness stalls (see *Operations log* below) — current t0 unix `1794608340`, under which round 1520 began 2026-11-14 05:35:00 +06. The genesis hash does not depend on t0 and is unchanged. |
 | Profile | reference (pot ÷300, window 522, usage floor 1000), V1 fair launch |
 | Rounds | 3 seconds each, 16 per epoch (an epoch ≈ 48 seconds) |
 | Ordering | BlockDAG + GHOSTDAG (k = 3), ticket lottery (~16 expected proposers/round) |
@@ -41,7 +41,7 @@ from genesis:
 ./target/release/poe-node testnet \
   --dir ~/poe-testnet-node \
   --listen /ip4/0.0.0.0/tcp/41001 \
-  --peer /ip4/104.29.200.165/tcp/41001/p2p/12D3KooWMTHxVwirHRgDskKvkSv12NgwVAtnitvwSBaoJVv3ataF
+  --peer /ip4/104.29.200.165/tcp/41001/p2p/12D3KooWLrxxWtsDSX4d3xVswbPVSLmS1PxNpDiFBgwtCx62gVGQ
 ```
 
 **If the chain is already running**, sync from a bundle published by
@@ -53,7 +53,7 @@ curl -O http://104.29.200.165:4180/bundle.bin
 ./target/release/poe-node testnet \
   --dir ~/poe-testnet-node \
   --listen /ip4/0.0.0.0/tcp/41001 \
-  --peer /ip4/104.29.200.165/tcp/41001/p2p/12D3KooWMTHxVwirHRgDskKvkSv12NgwVAtnitvwSBaoJVv3ataF \
+  --peer /ip4/104.29.200.165/tcp/41001/p2p/12D3KooWLrxxWtsDSX4d3xVswbPVSLmS1PxNpDiFBgwtCx62gVGQ \
   --sync-from ./bundle.bin
 ```
 
@@ -85,9 +85,9 @@ node casts every vote it owes (stay online and unrevoked).
 The first nodes, run by the launch operator on a best-effort basis —
 any node can serve as a peer; these are conveniences, not authorities:
 
-- `/ip4/104.29.200.165/tcp/41001/p2p/12D3KooWMTHxVwirHRgDskKvkSv12NgwVAtnitvwSBaoJVv3ataF` (machine 3950040106910302592)
-- `/ip4/104.29.200.165/tcp/41002/p2p/12D3KooWBhCgocWUu6UTiP97UTvmyiZQvqr7wxC9cbLpoXZkVnQi` (machine 11579431428148030288)
-- `/ip4/104.29.200.165/tcp/41003/p2p/12D3KooWLWFD73oLwmRwbf2CEk2Q5xmfhDtTk2P8yXmxMBdnYaLQ` (machine 1357345935748043147)
+- `/ip4/104.29.200.165/tcp/41001/p2p/12D3KooWLrxxWtsDSX4d3xVswbPVSLmS1PxNpDiFBgwtCx62gVGQ` (machine 1123122162023658167)
+- `/ip4/104.29.200.165/tcp/41002/p2p/12D3KooWEjHriRjvC6R6pp5JaWWCtFMVV5S3EhXxU8pJUNF87u7g` (machine 11887545442228343284)
+- `/ip4/104.29.200.165/tcp/41003/p2p/12D3KooWKZZ92UqEHSv6tJShiJThSQs7reBHgUbWMoD6WRUghaKf` (machine 13754866497659891996 — a rotated identity: the original third bootstrap's keys were lost during operations on 2026-11-14; the fresh identity joined the running chain in epoch 76, see the operations log)
 
 **Reachability, stated plainly:** the operator's VM sits behind NAT
 with no inbound port mapping. External TCP checks (check-host.net,
@@ -143,9 +143,79 @@ quiet; nothing is owed or lost — the testnet keeps no value.
 - Nodes keep no long-term peer exchange yet: if all your `--peer`
   contacts vanish, restart with a live one. mDNS finds nodes on a LAN
   automatically.
-- State sync is bundle-based (an epoch-boundary snapshot served as a
-  file), not yet an in-protocol exchange.
+- State sync starts from a bundle (an epoch-boundary snapshot served
+  as a file); from there the joiner catches up in-protocol — peers
+  re-serve the current epoch's blocks, ticket reveals and votes over
+  gossip for a while after a new machine registers. A full
+  history-sync protocol for arbitrary depths is not built.
+- Restarting a node resumes it from the full finality state it
+  persists after every round (`finstate.bin` in its data directory):
+  stop and relaunch with the same `--dir` and arguments. It rebuilds
+  from its exact pre-stop position, re-casts its own votes for
+  rounds that never finalized (as *duplicates* at peers, never as
+  second claims), and continues in sequence. Without a finstate it
+  falls back to the epoch bundle in its directory.
 - The launch operator's bootstrap nodes run on one VM behind NAT
   (no inbound reachability from the public internet — see Bootstrap
   nodes); if it is down, anyone can re-bootstrap a peering point
   from this spec — the chain is its nodes, not its first operator.
+- A node holds roughly 2 GB of memory while running; the operator's
+  8 GB VM sustains three nodes. Size your host accordingly.
+
+## Operations log — 2026-11-14 (read this before trusting liveness)
+
+The current chain is the third genesis of 2026-11-13/14 (t0 00:30
++06). It closed epochs 0–66 identically on three nodes, survived a
+single-node restart mid-epoch with state intact, and then taught
+its operators the launch's main lesson, stated plainly:
+
+**A round whose committee loses a vote can strand the chain.** A
+committee is drawn once, when its round's reveals close, and votes
+are one-time claims — there is no re-draw and no second vote. If a
+drawn voter crashes, falls an epoch behind, or votes for a
+different block because the leading block reached it late, that
+round can sit one vote short of finality *forever*, and every later
+round waits behind it (finality is sequential). This happened at
+rounds 752, 1084 and 1231 — each time after exactly the churn a
+public testnet exists to invite (a hub node OOM-killed at ~2 GB per
+node on a small VM, restarts, a late joiner in a diverged view).
+
+The operator's recovery each time was a **re-anchor**: every node
+re-syncs from the last epoch bundle (the chain's own checkpoint —
+ledger state at the last close, which is final and was never in
+dispute), the clock's t0 is shifted so the next round starts at a
+fresh wall time, and the chain resumes. No finalized state was ever
+lost or rewritten; the stranded rounds' unfinalized tail is
+discarded. Re-anchors so far: rounds 752, 1072, 1216, 1232, 1456
+and 1520 (the last is the current t0 above). The bootstrap nodes
+run under systemd supervision (`Restart=always`, starts staggered
+because XMSS key derivation is minutes of CPU); supervision keeps
+the processes alive, but a restart into a stranded round still
+needs the re-anchor above — it is a procedure, not yet a mechanism.
+
+Two honest consequences:
+
+- **Liveness under churn is this testnet's open problem**, and it is
+  a *design* question, not an implementation bug: the audited model
+  assumes lockstep rounds (its simnet, with Byzantine voters
+  withholding, finalizes because committees there are larger and
+  delivery is uniform). Whether the protocol gains a liveness
+  mechanism (committee re-draw, vote timeouts, larger committees)
+  is a decision for the protocol's authors — it will not be patched
+  in silently here. Demonstrating a *new* stall shape is a valid
+  bounty finding; re-demonstrating this one is documented already.
+- A late joiner's join landing is proven: at epoch 76 a fresh
+  identity (the rotated third bootstrap) synced from the epoch-75
+  bundle, proposed its join, and the close printed **claimants=1,
+  grant_each=99999** with the identical state root
+  `d68cda776b23a5c9` on independent nodes. Earlier join attempts
+  exposed a real bug — a join proposed in a block that never
+  finalized was never retried — fixed and documented in the
+  repository README (live-network correction 11).
+
+Ghost identities: every wiped-and-recreated node directory leaves
+its previous machine registered on the ledger forever (joins are
+once-ever and there is no deregistration). Ghosts never reveal, so
+they are never drawn into committees; they only dilute the draw
+denominator. The ledger currently carries a handful from launch
+operations.
