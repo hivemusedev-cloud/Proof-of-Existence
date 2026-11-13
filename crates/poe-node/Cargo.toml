@@ -2,7 +2,7 @@
 name = "poe-node"
 version = "0.1.0"
 edition = "2021"
-description = "PoE node binary: the kernel demo, the genesis builder and the single-node devnet (BUILD_FLOW Step 12)."
+description = "PoE node binary: the kernel demo, the genesis builder, the single-node devnet and the live testnet node (BUILD_FLOW Step 12)."
 
 [dependencies]
 poe-kernel = { path = "../poe-kernel" }
@@ -11,3 +11,8 @@ poe-epoch = { path = "../poe-epoch" }
 poe-identity = { path = "../poe-identity" }
 poe-crypto = { path = "../poe-crypto" }
 rand = "0.8"
+poe-dag = { path = "../poe-dag" }
+poe-finality = { path = "../poe-finality" }
+poe-net = { path = "../poe-net" }
+libp2p = { version = "0.56", features = ["gossipsub", "mdns", "tcp", "noise", "yamux", "tokio", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs"] }

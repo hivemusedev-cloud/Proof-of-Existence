@@ -359,3 +359,65 @@ mod tests {
         }
     }
 }
+
+// -- Wire encoding (the gossip payload format for blocks) -------------------
+
+/// Canonical block encoding: machine, round, parents, payload, id —
+/// big-endian counts and lengths throughout, mirroring poe-store's style.
+pub fn encode_block(b: &Block) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64 + b.parents.len() * 64 + b.payload.len());
+    out.extend_from_slice(&b.machine.to_be_bytes());
+    out.extend_from_slice(&b.round.to_be_bytes());
+    out.extend_from_slice(&(b.parents.len() as u32).to_be_bytes());
+    for p in &b.parents {
+        out.extend_from_slice(p);
+    }
+    out.extend_from_slice(&(b.payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(&b.payload);
+    out.extend_from_slice(&b.id);
+    out
+}
+
+/// Decode a block; the id is recomputed from the fields and must match
+/// the carried id, so a tampered payload never decodes.
+pub fn decode_block(raw: &[u8]) -> Option<Block> {
+    let mut off = 0usize;
+    let take = |raw: &[u8], off: &mut usize, n: usize| -> Option<Vec<u8>> {
+        let end = off.checked_add(n)?;
+        let s = raw.get(*off..end)?.to_vec();
+        *off = end;
+        Some(s)
+    };
+    let machine = u64::from_be_bytes(take(raw, &mut off, 8)?.try_into().ok()?);
+    let round = u64::from_be_bytes(take(raw, &mut off, 8)?.try_into().ok()?);
+    let np = u32::from_be_bytes(take(raw, &mut off, 4)?.try_into().ok()?) as usize;
+    if np > 1024 {
+        return None;
+    }
+    let mut parents = Vec::with_capacity(np);
+    for _ in 0..np {
+        let p: BlockId = take(raw, &mut off, 64)?.try_into().ok()?;
+        parents.push(p);
+    }
+    let plen = u32::from_be_bytes(take(raw, &mut off, 4)?.try_into().ok()?) as usize;
+    if plen > 1 << 22 {
+        return None;
+    }
+    let payload = take(raw, &mut off, plen)?;
+    let id: BlockId = take(raw, &mut off, 64)?.try_into().ok()?;
+    let b = Block::new(machine, round, parents, payload);
+    if b.id != id {
+        return None;
+    }
+    Some(b)
+}
+
+impl Dag {
+    /// Every block in the DAG, in a deterministic order (round, then id) —
+    /// what a state snapshot serializes and a restoring node replays.
+    pub fn blocks(&self) -> Vec<Block> {
+        let mut bs: Vec<Block> = self.blocks.values().cloned().collect();
+        bs.sort_by(|a, b| a.round.cmp(&b.round).then(a.id.cmp(&b.id)));
+        bs
+    }
+}

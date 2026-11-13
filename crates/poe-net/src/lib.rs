@@ -54,7 +54,21 @@ pub struct Inbound {
 impl NetNode {
     /// Create a node and start listening on an OS-assigned localhost port.
     pub async fn new() -> std::io::Result<NetNode> {
-        let mut swarm = SwarmBuilder::with_new_identity()
+        Self::start(None, "/ip4/127.0.0.1/tcp/0").await
+    }
+
+    /// Create a node with a persistent transport identity (a libp2p
+    /// keypair the caller loaded from its key store) listening on the
+    /// given multiaddr — the form a long-running network node takes.
+    /// With `None` the identity is fresh, as in [`NetNode::new`].
+    pub async fn start(
+        keypair: Option<libp2p::identity::Keypair>,
+        listen: &str,
+    ) -> std::io::Result<NetNode> {
+        let mut swarm = match keypair {
+            Some(kp) => SwarmBuilder::with_existing_identity(kp),
+            None => SwarmBuilder::with_new_identity(),
+        }
             .with_tokio()
             .with_tcp(
                 libp2p::tcp::Config::default(),
@@ -91,7 +105,7 @@ impl NetNode {
             .map_err(std::io::Error::other)?
             .build();
         swarm
-            .listen_on("/ip4/127.0.0.1/tcp/0".parse().expect("static addr"))
+            .listen_on(listen.parse().map_err(std::io::Error::other)?)
             .map_err(std::io::Error::other)?;
         let topic_blocks = gossipsub::IdentTopic::new(TOPIC_BLOCKS);
         let topic_votes = gossipsub::IdentTopic::new(TOPIC_VOTES);

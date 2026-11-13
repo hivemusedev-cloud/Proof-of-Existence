@@ -9,6 +9,7 @@
 //! persisted through poe-store, a close, a restart, and a replay check.
 
 mod genesis;
+mod testnet;
 
 use poe_kernel::ledger::{live_a, Ledger, Note, Op};
 use poe_kernel::COIN;
@@ -19,6 +20,85 @@ fn note(cm: u64, nf: u64, value: u64, born: u64) -> Note {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "testnet-genesis-hash" {
+        // Print the genesis hash for a candidate root public key (hex):
+        // the value a chain spec must carry for that root.
+        let pk = testnet::hex_decode(&args[2]).expect("root pk hex");
+        let spec = testnet::Spec {
+            name: "poe-testnet-1".to_string(),
+            root_id: 1,
+            root_quota: 100_000,
+            root_pk: pk,
+            rounds_per_epoch: 16,
+            round_secs: 3,
+            ghostdag_k: 3,
+            t0_unix: 0,
+            genesis_hash: [0u8; 64],
+        };
+        let bundle = genesis::build_genesis(&spec.genesis_spec());
+        println!("{}", testnet::hex_encode(&bundle.hash));
+        return;
+    }
+    if args.len() > 1 && args[1] == "testnet-root-keygen" {
+        let dir = args
+            .get(2)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        match testnet::root_keygen(&dir) {
+            Ok(pk_hex) => println!("root_pk={pk_hex}"),
+            Err(e) => {
+                eprintln!("root keygen failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "testnet" {
+        let mut dir = std::env::temp_dir().join("poe-testnet-node");
+        let mut listen = "/ip4/0.0.0.0/tcp/41001".to_string();
+        let mut peers: Vec<String> = Vec::new();
+        let mut sync_from: Option<std::path::PathBuf> = None;
+        let mut rounds: u64 = 0;
+        let mut i = 2;
+        while i < args.len() {
+            match args[i].as_str() {
+                "--dir" => {
+                    dir = std::path::PathBuf::from(&args[i + 1]);
+                    i += 2;
+                }
+                "--listen" => {
+                    listen = args[i + 1].clone();
+                    i += 2;
+                }
+                "--peer" => {
+                    peers.push(args[i + 1].clone());
+                    i += 2;
+                }
+                "--sync-from" => {
+                    sync_from = Some(std::path::PathBuf::from(&args[i + 1]));
+                    i += 2;
+                }
+                "--rounds" => {
+                    rounds = args[i + 1].parse().unwrap_or(0);
+                    i += 2;
+                }
+                other => {
+                    eprintln!("unknown testnet argument: {other}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let targs = testnet::TestnetArgs { dir, listen, peers, sync_from, run_rounds: rounds };
+        match rt.block_on(testnet::run_testnet(targs)) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("testnet node failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if args.len() > 1 && args[1] == "devnet" {
         let dir = args
             .get(2)

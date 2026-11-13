@@ -1,7 +1,8 @@
 //! poe-finality — ordering's other half (BUILD_FLOW Step 4).
 //!
-//! * **Round beacons** are hashes of the DAG's past: `H(domain, tip, round)`
-//!   over the selected tip, domain-separated per purpose.
+//! * **Round beacons** are hashes of the DAG's past: `H(domain, ref, round)`
+//!   over a finalized reference block (see [`Finality::beacon`]),
+//!   domain-separated per purpose.
 //! * **Proposals**: a machine may propose in a round only if its hash-chain
 //!   ticket, drawn against the round's proposal beacon, wins the manual's
 //!   `16/A` rule (Step 2's tickets, verified here against the committed
@@ -146,11 +147,37 @@ impl Finality {
         round / self.rounds_per_epoch
     }
 
-    /// A round beacon: a hash of the DAG's past (its selected tip) and the
-    /// round, under a purpose domain.
+    /// A round beacon: a hash of the DAG's past and the round, under a
+    /// purpose domain. The past it names is the FINALIZED block of the
+    /// round two back — a fixed point every honest node holds identically
+    /// once that round is final — or, for rounds 0 and 1, the genesis
+    /// block. (Live-network correction, 2026-11-13: the first reading
+    /// hashed the node's current selected tip, which changes with every
+    /// block a node happens to have received, so two honest nodes sampled
+    /// different committees and refused each other's proposals; the chain
+    /// could not converge outside lockstep. A finalized reference is the
+    /// only reading of "the DAG's past" that is a function of the chain
+    /// rather than of message arrival order.)
     pub fn beacon(&self, domain: &str, round: u64) -> H512 {
-        let tip = self.dag.selected_tip().unwrap_or([0u8; 64]);
-        h(domain, &[Part::Bytes(&tip), Part::Nat(round)])
+        let reference = self.beacon_reference(round);
+        h(domain, &[Part::Bytes(&reference), Part::Nat(round)])
+    }
+
+    /// The beacon's reference block for `round`: the finalized block of
+    /// round `round - 2` when there is one, else the genesis block (the
+    /// unique parentless round-0 block), else zero.
+    pub fn beacon_reference(&self, round: u64) -> BlockId {
+        if round >= 2 {
+            if let Some(b) = self.finalized.get(&(round - 2)) {
+                return *b;
+            }
+        }
+        self.dag
+            .blocks()
+            .into_iter()
+            .find(|b| b.round == 0 && b.parents.is_empty())
+            .map(|b| b.id)
+            .unwrap_or([0u8; 64])
     }
 
     fn draw_link(&self, machine: u64, round: u64) -> Option<H512> {
@@ -201,6 +228,19 @@ impl Finality {
 
     pub fn committee(&self, round: u64) -> Option<&[u64]> {
         self.committees.get(&round).map(|v| v.as_slice())
+    }
+
+    /// Diagnostic: the votes counted so far for `round`, as
+    /// (block, distinct voters), sorted by block id.
+    pub fn vote_tally(&self, round: u64) -> Vec<(BlockId, u64)> {
+        let mut out: Vec<(BlockId, u64)> = self
+            .voters
+            .iter()
+            .filter(|((r, _), _)| *r == round)
+            .map(|((_, b), s)| (*b, s.len() as u64))
+            .collect();
+        out.sort_unstable();
+        out
     }
 
     /// Offer a proposal block. The proposer's ticket must win the `16/A`
@@ -329,5 +369,191 @@ impl Finality {
         let owed = self.owed.get(&(machine, epoch)).copied().unwrap_or(0);
         let cast = self.cast.get(&(machine, epoch)).copied().unwrap_or(0);
         owed > 0 && cast == owed
+    }
+}
+
+// -- Wire encodings (the gossip payload formats) -----------------------------
+
+fn put_u64(out: &mut Vec<u8>, v: u64) {
+    out.extend_from_slice(&v.to_be_bytes());
+}
+fn put_bytes32s(out: &mut Vec<u8>, xs: &[H32]) {
+    out.extend_from_slice(&(xs.len() as u32).to_be_bytes());
+    for x in xs {
+        out.extend_from_slice(x);
+    }
+}
+
+struct Reader<'a> {
+    raw: &'a [u8],
+    off: usize,
+}
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let end = self.off.checked_add(n)?;
+        let s = self.raw.get(self.off..end)?;
+        self.off = end;
+        Some(s)
+    }
+    fn u64(&mut self) -> Option<u64> {
+        Some(u64::from_be_bytes(self.take(8)?.try_into().ok()?))
+    }
+    fn bytes32s(&mut self) -> Option<Vec<H32>> {
+        let n = u32::from_be_bytes(self.take(4)?.try_into().ok()?) as usize;
+        if n > 4096 {
+            return None;
+        }
+        let mut xs = Vec::with_capacity(n);
+        for _ in 0..n {
+            xs.push(self.take(32)?.try_into().ok()?);
+        }
+        Some(xs)
+    }
+}
+
+/// Canonical vote encoding: machine, round, block id, then the XMSS
+/// signature (leaf, WOTS+ chain values, authentication path).
+pub fn encode_vote(v: &Vote) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_u64(&mut out, v.machine);
+    put_u64(&mut out, v.round);
+    out.extend_from_slice(&v.block);
+    put_u64(&mut out, v.sig.leaf);
+    put_bytes32s(&mut out, &v.sig.wots);
+    put_bytes32s(&mut out, &v.sig.auth);
+    out
+}
+
+pub fn decode_vote(raw: &[u8]) -> Option<Vote> {
+    let mut r = Reader { raw, off: 0 };
+    let machine = r.u64()?;
+    let round = r.u64()?;
+    let block: BlockId = r.take(64)?.try_into().ok()?;
+    let leaf = r.u64()?;
+    let wots = r.bytes32s()?;
+    let auth = r.bytes32s()?;
+    Some(Vote { machine, round, block, sig: XmssSignature { leaf, wots, auth } })
+}
+
+/// Canonical machine-announcement encoding: everything a peer needs to
+/// register the machine — its attestation (device key, root, serial,
+/// expiry, root signature) and its finality material (XMSS root and
+/// height, ticket-chain commitment). The identity key doubles as the
+/// device key, so it appears once.
+#[derive(Clone)]
+pub struct Announcement {
+    pub device_pk: Vec<u8>,
+    pub root_id: u64,
+    pub serial: u64,
+    pub expiry_epoch: u64,
+    pub root_signature: Vec<u8>,
+    pub xmss_root: H32,
+    pub xmss_height: u32,
+    pub chain_commitment: H512,
+}
+
+pub fn encode_announcement(a: &Announcement) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(a.device_pk.len() as u32).to_be_bytes());
+    out.extend_from_slice(&a.device_pk);
+    put_u64(&mut out, a.root_id);
+    put_u64(&mut out, a.serial);
+    put_u64(&mut out, a.expiry_epoch);
+    out.extend_from_slice(&(a.root_signature.len() as u32).to_be_bytes());
+    out.extend_from_slice(&a.root_signature);
+    out.extend_from_slice(&a.xmss_root);
+    out.extend_from_slice(&a.xmss_height.to_be_bytes());
+    out.extend_from_slice(&a.chain_commitment);
+    out
+}
+
+pub fn decode_announcement(raw: &[u8]) -> Option<Announcement> {
+    let mut r = Reader { raw, off: 0 };
+    let pk_len = u32::from_be_bytes(r.take(4)?.try_into().ok()?) as usize;
+    if pk_len > 8192 {
+        return None;
+    }
+    let device_pk = r.take(pk_len)?.to_vec();
+    let root_id = r.u64()?;
+    let serial = r.u64()?;
+    let expiry_epoch = r.u64()?;
+    let sig_len = u32::from_be_bytes(r.take(4)?.try_into().ok()?) as usize;
+    if sig_len > 8192 {
+        return None;
+    }
+    let root_signature = r.take(sig_len)?.to_vec();
+    let xmss_root: H32 = r.take(32)?.try_into().ok()?;
+    let xmss_height = u32::from_be_bytes(r.take(4)?.try_into().ok()?);
+    let chain_commitment: H512 = r.take(64)?.try_into().ok()?;
+    Some(Announcement {
+        device_pk,
+        root_id,
+        serial,
+        expiry_epoch,
+        root_signature,
+        xmss_root,
+        xmss_height,
+        chain_commitment,
+    })
+}
+
+// -- State snapshot / restore (epoch-boundary sync for late joiners) --------
+
+/// The part of a node's finality state a late joiner needs at an epoch
+/// boundary, when every past round is finalized: who the machines are,
+/// who stands revoked, which XMSS leaves are burned, what is final, and
+/// the DAG itself. Per-round working state (reveals, committees, claim
+/// registries, owed/cast counters) is NOT carried: claims and counters
+/// are per-round and per-epoch, so for every future round a restored
+/// node starts exactly where a node that never left starts.
+pub struct FinalitySnapshot {
+    pub k: u64,
+    pub rounds_per_epoch: u64,
+    pub machines: Vec<(u64, MachineInfo)>,
+    pub revoked: Vec<(u64, u64)>,
+    pub used_leaves: Vec<(u64, Vec<u64>)>,
+    pub finalized: Vec<(u64, BlockId)>,
+    pub dag_blocks: Vec<Block>,
+}
+
+impl Finality {
+    pub fn snapshot(&self) -> FinalitySnapshot {
+        FinalitySnapshot {
+            k: self.dag.k,
+            rounds_per_epoch: self.rounds_per_epoch,
+            machines: self
+                .machines
+                .iter()
+                .map(|(id, info)| (*id, info.clone()))
+                .collect(),
+            revoked: self.revoked.iter().map(|(m, e)| (*m, *e)).collect(),
+            used_leaves: self
+                .used_leaves
+                .iter()
+                .map(|(m, s)| (*m, s.iter().copied().collect()))
+                .collect(),
+            finalized: self.finalized.iter().map(|(r, b)| (*r, *b)).collect(),
+            dag_blocks: self.dag.blocks(),
+        }
+    }
+
+    pub fn restore(snap: FinalitySnapshot) -> Finality {
+        let mut fin = Finality::new(snap.k, snap.rounds_per_epoch);
+        for b in snap.dag_blocks {
+            let _ = fin.dag.insert(b);
+        }
+        for (id, info) in snap.machines {
+            fin.register_machine(id, info);
+        }
+        for (m, e) in snap.revoked {
+            fin.revoked.insert(m, e);
+        }
+        for (m, leaves) in snap.used_leaves {
+            fin.used_leaves.insert(m, leaves.into_iter().collect());
+        }
+        for (r, b) in snap.finalized {
+            fin.finalized.insert(r, b);
+        }
+        fin
     }
 }

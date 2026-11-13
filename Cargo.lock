@@ -2367,12 +2367,17 @@ dependencies = [
 name = "poe-node"
 version = "0.1.0"
 dependencies = [
+ "libp2p",
  "poe-crypto",
+ "poe-dag",
  "poe-epoch",
+ "poe-finality",
  "poe-identity",
  "poe-kernel",
+ "poe-net",
  "poe-store",
  "rand 0.8.8",
+ "tokio",
 ]
 
 [[package]]

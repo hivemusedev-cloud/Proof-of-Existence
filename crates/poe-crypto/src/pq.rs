@@ -41,6 +41,24 @@ impl DsaKeypair {
             .expect("ML-DSA-87 sign")
             .to_vec()
     }
+
+    /// The secret key's serialized bytes — for persistence in the node's
+    /// own key store (a file the node operator protects; never a wire
+    /// format, never logged).
+    pub fn secret_key_bytes(&self) -> Vec<u8> {
+        use fips204::traits::SerDes;
+        self.sk.clone().into_bytes().to_vec()
+    }
+
+    /// Rebuild a keypair from serialized public + secret key bytes.
+    pub fn from_key_bytes(pk_bytes: &[u8], sk_bytes: &[u8]) -> Option<DsaKeypair> {
+        use fips204::traits::SerDes;
+        let pk_arr: [u8; DSA_PUBLIC_KEY_LEN] = pk_bytes.try_into().ok()?;
+        let sk_arr: [u8; DSA_SECRET_KEY_LEN] = sk_bytes.try_into().ok()?;
+        let pk = fips204::ml_dsa_87::PublicKey::try_from_bytes(pk_arr).ok()?;
+        let sk = fips204::ml_dsa_87::PrivateKey::try_from_bytes(sk_arr).ok()?;
+        Some(DsaKeypair { pk, sk })
+    }
 }
 
 pub fn dsa_verify(pk_bytes: &[u8], msg: &[u8], sig: &[u8]) -> bool {

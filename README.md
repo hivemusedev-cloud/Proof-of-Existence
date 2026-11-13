@@ -3,6 +3,11 @@
 The Proof of Existence blockchain node, built in Rust against the verified
 Lean specification (`Proof_of_Existence_v1_1_1_CC.lean`).
 
+**Public testnet `poe-testnet-1` is live** (Step 12c, launched 2026-11-13):
+see [`testnet/TESTNET.md`](testnet/TESTNET.md) for how to join and
+[`testnet/BOUNTIES.md`](testnet/BOUNTIES.md) for the three falsifier
+bounties (F-Height, F-Clone, F-First-Year).
+
 ## Increment 1 — poe-kernel (this build)
 
 A definition-for-definition port of the Lean kernel's core:
@@ -115,8 +120,9 @@ Built exactly as BUILD_FLOW Step 4 specifies — three new crates:
   DAGs fed the same 60 blocks in different valid orders produce the
   identical linearization and identical blue scores. This replaces the
   manual's imported ordering assumption with tested code.
-- `crates/poe-finality` (2/2 tests) — round beacons (`H` over the
-  selected tip, domain-separated); proposal draws verified against the
+- `crates/poe-finality` (2/2 tests) — round beacons (`H` over a
+  finalized reference block, domain-separated — see the live-network
+  corrections under Step 12c below); proposal draws verified against the
   committed ticket chain under the manual's 16/A rule; committees
   sampled by tickets (target 32); XMSS one-time votes with leaf-reuse
   rejection; **>2/3 finality**; double-proposals and equivocations
@@ -140,15 +146,124 @@ Simnet runtime note: the finality battery takes ~3 minutes in a debug
 build on this VM (XMSS/ML-DSA in debug profile), all of it crypto, none
 of it waiting.
 
-## Not yet built (per BUILD_FLOW.md)
+## Increments 6–11 — Steps 5–11 (done 2026-11-13)
 
-The ZK proof layer (Step 5, the long pole), the epoch/money engine
-(Step 6), identity/attestation (Step 7), wallets + offline payments
-(Step 8), messaging (Step 9), V2 liquidity (Step 10).
+- `crates/poe-zk` (Step 5, 3/3 tests) — Plonky3 uni-stark with a ZK FRI
+  PCS over Goldilocks; one parameterized `BindingAir` carries all six
+  kernel bindings (join admission, transfer slot/epoch, vesting lock,
+  offline show line, message tag slot, contract version execution).
+  Stated maturity: the algebraic accumulator is proven in-circuit;
+  binding the public root to the node's actual `H`, an external
+  security review, and phone benchmarks remain owed (see Residue).
+- `crates/poe-epoch` (Step 6, 6/6 tests) — the Tokenomics epoch close
+  ported definition-for-definition: profiles, launch gates, vesting
+  (1/50 per credited epoch), the V1 reserve burn at epoch 523, renewal
+  evaluation (25 faithful epochs + at least half the grant bonded).
+  Batteries: a 400-machine join-flood year stays under the proved
+  first-year envelope of 520,200,000,000; a 40-year replay tracks the
+  Fortran twin's circulation band.
+- `crates/poe-identity` (Step 7, 4/4 tests) — ML-DSA attestation from
+  admitted manufacturer roots, device ids derived from device keys,
+  two-level revocation, unattested/forged devices relay-only. The
+  F-Clone drill passes. Mobile shells (Kotlin/Swift over UniFFI) are
+  not buildable in the build VM and remain owed.
+- `crates/poe-wallet` (Step 8, 5/5 tests) — the 1 KiB Existence
+  Container, offline line-key shows under a merchant policy, one-time
+  slot vouchers, 1-2-5 splitting. The finish-line drill passes: two
+  offline shows extract the secret and unmask the committed owner; a
+  single show provably carries no secret information.
+- `crates/poe-msg` (Step 9, 5/5 tests) — detection tags in a hash
+  index under the 4-week window rule, an ML-KEM-1024 ratchet deniable
+  by construction, slot-priced sending. Battery at full scale:
+  100,000 claims accepted, 100,000 replays refused, 100,000 restamps
+  refused.
+- `crates/poe-v2` (Step 10, 7/7 tests) — the V2 curve law and genesis
+  pool, the price-cap oracle, the listed launch, bridge lanes with a
+  conservation check, hand-written 256-bit mul-div. Adversarial
+  battery: 20,000 offers, 11,875 refused across all four refusal
+  classes. The kernel+liquidity+tokenomics composition proof remains
+  owed as a Lean obligation. V2 activates only after V1 is stable in
+  operation.
+- `crates/poe-compute` (Step 11, 5/5 tests) — the PhysOS compute
+  kernels ported function-for-function from the Python seed and pinned
+  against it, with the triaxial audit in protocol shape
+  (Sealed/Broken/Open). The seed's full claim-vs-denial determinant
+  formalism is not ported (stated in the crate docs).
+
+## Step 12 — genesis, devnet, and the public testnet (12c, live)
+
+- `poe-node` genesis builder: profile + launch + attestation roots →
+  a genesis bundle whose hash commits to every constant; moving any
+  constant is a different chain (tested). The single-node devnet
+  (`poe-node devnet [dir]`) runs joins, a close, a transfer, snapshot
+  and restart-replay against the real store.
+- The testnet node (`poe-node testnet`) holds a persistent identity,
+  self-attests under the chain's published test root (testnet-only:
+  identities are free by design; mainnet roots belong to
+  manufacturers and are never published), and runs the round loop —
+  reveal, propose, vote, finalize, apply, epoch close — over libp2p
+  gossip. Late joiners sync from a per-epoch bundle (`--sync-from`)
+  written by every node at each close.
+- Chain: `poe-testnet-1`, genesis hash
+  `6107532c003ef90c66a1fb1151436803600a7e3600c312b96e6639b4304ab35f9c6776a8dc9994cff8064a5122022a8edc7966956860cfbbd50e4360d4e3de8e`,
+  genesis time 2026-11-13 20:52 +06 (unix 1794581520), 16 rounds per
+  epoch, 3-second rounds, GHOSTDAG k = 3. Spec:
+  `crates/poe-node/testnet-1.spec` (copy in `testnet/`).
+
+### Live-network corrections (found by running it, 2026-11-13)
+
+The lockstep simnet passed from the start; the live network did not
+converge until four network-facing readings were corrected. The
+kernel and money rules are untouched; each correction is also
+documented at its code site.
+
+1. **Beacon anchor.** Round beacons hashed the node's *current
+   selected tip*, which changes with every block a node happens to
+   have received — two honest nodes sampled different committees and
+   refused each other's proposals. Beacons now hash the *finalized
+   block of the round two back* (the genesis block for rounds 0–1): a
+   fixed point every honest node holds identically.
+2. **Reveals are buffered, not dropped.** A ticket reveal that
+   arrived before its machine's registration had landed was refused
+   and lost; that node's committee for the round silently shrank
+   (in the worst case to itself, finalizing its own block). Reveals
+   are now held until registration lands, and gossip messages carry a
+   nonce so republication is not suppressed by content-hash dedup.
+3. **Rounds are never skipped.** The round loop took its round from
+   the wall clock; a node whose pre-genesis wait overshot genesis by
+   one round never closed round 0's committee and never cast its
+   vote, stalling the chain one vote short of finality forever.
+   Rounds are now processed strictly in sequence; a node behind the
+   clock replays its missed rounds back-to-back.
+4. **Heartbeats sign after finality.** The epoch heartbeat commits
+   to the finalized tip of the epoch's last round, but was signed at
+   the boundary round — one round before that tip was final — over
+   the zero tip no verifier accepts. Heartbeats are now signed in
+   the first round where the epoch's last round is final, and closes
+   wait one further round so peer heartbeats can arrive.
+
+Acceptance evidence (2026-11-13): three nodes over real libp2p
+finalized 39 of 40 rounds in lockstep and printed identical closes —
+epoch 0: 3 claimants × 100,000, credited 3, state root
+`101456563fc6902d`; epoch 1: root `f7f2160e49a97a53` — reproduced
+across independent runs. A note on epoch 1's zero claimants: that is
+the kernel's own law, not a stall — `Join` is once-ever per machine
+and later claims come from new joins and from renewals after 25
+faithful epochs.
+
+## Residue (not done, not claimed)
+
+Step 12b (Docker simnet at scale — no Docker in the build VM; the
+in-process Byzantine simnet covers chaos at protocol level), Step 12d
+(external audit + bug bounty), Step 12e (mainnet genesis ceremony),
+the Step 5 external ZK security review and phone benchmarks, the
+Step 10 composition proof (Lean), and the Step 7 mobile shells.
 
 ## Run
 
 ```
-cargo test
-cargo run -p poe-node
+cargo test --workspace
+cargo run -p poe-node            # kernel demo
+cargo run -p poe-node -- devnet  # single-node devnet
+cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the testnet
 ```
