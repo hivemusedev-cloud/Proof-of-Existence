@@ -1,0 +1,13 @@
+[package]
+name = "poe-node"
+version = "0.1.0"
+edition = "2021"
+description = "PoE node binary: the kernel demo, the genesis builder and the single-node devnet (BUILD_FLOW Step 12)."
+
+[dependencies]
+poe-kernel = { path = "../poe-kernel" }
+poe-store = { path = "../poe-store" }
+poe-epoch = { path = "../poe-epoch" }
+poe-identity = { path = "../poe-identity" }
+poe-crypto = { path = "../poe-crypto" }
+rand = "0.8"

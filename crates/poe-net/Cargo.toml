@@ -1,0 +1,10 @@
+[package]
+name = "poe-net"
+version = "0.1.0"
+edition = "2021"
+description = "PoE networking: libp2p gossipsub transport for blocks, votes and acts (BUILD_FLOW Step 4)."
+
+[dependencies]
+libp2p = { version = "0.56", features = ["gossipsub", "mdns", "tcp", "noise", "yamux", "tokio", "macros"] }
+futures = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/poe-kernel", "crates/poe-crypto", "crates/poe-store", "crates/poe-dag", "crates/poe-zk", "crates/poe-epoch", "crates/poe-identity", "crates/poe-finality", "crates/poe-wallet", "crates/poe-msg", "crates/poe-v2", "crates/poe-compute", "crates/poe-net", "crates/poe-node"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# PoE node workspace.
+# Ground rule for every consensus path in this repo: deterministic integer
+# arithmetic only — no floats, no wall clock, no randomness, no iteration
+# over hash maps. The Lean 4 kernel (Proof_of_Existence_v1_1_1_CC.lean) is
+# the specification; this code must match it definition for definition.

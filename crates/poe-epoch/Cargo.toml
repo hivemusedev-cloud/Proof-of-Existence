@@ -1,0 +1,9 @@
+[package]
+name = "poe-epoch"
+version = "0.1.0"
+edition = "2021"
+description = "PoE epoch/money engine: the tokenomics close (ceiling, four-phase budget, profiled pot), vesting, burns, renewal evaluation (BUILD_FLOW Step 6)."
+
+[dependencies]
+poe-kernel = { path = "../poe-kernel" }
+poe-crypto = { path = "../poe-crypto" }

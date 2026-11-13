@@ -1,0 +1,8 @@
+[package]
+name = "poe-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "PoE settlement kernel: a definition-for-definition Rust port of the verified Lean kernel core (claims, settlement, registries, ledger acts)."
+
+[dependencies]
+# Deliberately empty: the kernel depends on std only.

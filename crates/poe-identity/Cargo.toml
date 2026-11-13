@@ -1,0 +1,9 @@
+[package]
+name = "poe-identity"
+version = "0.1.0"
+edition = "2021"
+description = "PoE identity: hardware-attested device binding — root admission with quotas, revocation, the clone defense, relay-only mode (BUILD_FLOW Step 7)."
+
+[dependencies]
+poe-crypto = { path = "../poe-crypto" }
+rand = "0.8"

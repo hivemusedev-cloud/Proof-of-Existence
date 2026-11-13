@@ -1,0 +1,9 @@
+[package]
+name = "poe-msg"
+version = "0.1.0"
+edition = "2021"
+description = "PoE messaging: detection-tag claims (replay/restamp refused), 4-week window, PQ deniable key exchange with a hash ratchet, slot-priced sending (BUILD_FLOW Step 9)."
+
+[dependencies]
+poe-crypto = { path = "../poe-crypto" }
+rand = "0.8"

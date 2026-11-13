@@ -1,0 +1,13 @@
+[package]
+name = "poe-finality"
+version = "0.1.0"
+edition = "2021"
+description = "PoE finality: ticket-sampled committees, one-time-key votes, >2/3 finality, evidence and revocation, heartbeat crediting."
+
+[dependencies]
+poe-kernel = { path = "../poe-kernel" }
+poe-crypto = { path = "../poe-crypto" }
+poe-dag = { path = "../poe-dag" }
+
+[dev-dependencies]
+rand = "0.8"

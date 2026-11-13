@@ -1,0 +1,9 @@
+[package]
+name = "poe-store"
+version = "0.1.0"
+edition = "2021"
+description = "PoE storage: canonical encoding, an append-only act log with snapshots, per-epoch state roots, window pruning support, and a cuckoo-filter index over window nullifiers."
+
+[dependencies]
+poe-kernel = { path = "../poe-kernel" }
+poe-crypto = { path = "../poe-crypto" }

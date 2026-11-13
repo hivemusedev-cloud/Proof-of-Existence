@@ -1,0 +1,9 @@
+[package]
+name = "poe-v2"
+version = "0.1.0"
+edition = "2021"
+description = "PoE Version 2, the listed launch: genesis pool and curve, the price oracle, the listing lane, the shared premine allowance, bridge lanes (BUILD_FLOW Step 10)."
+
+[dependencies]
+poe-kernel = { path = "../poe-kernel" }
+poe-crypto = { path = "../poe-crypto" }

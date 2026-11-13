@@ -1,0 +1,8 @@
+[package]
+name = "poe-dag"
+version = "0.1.0"
+edition = "2021"
+description = "PoE BlockDAG assembly and GHOSTDAG linearization, implemented from the PHANTOM/GHOSTDAG spec."
+
+[dependencies]
+poe-crypto = { path = "../poe-crypto" }

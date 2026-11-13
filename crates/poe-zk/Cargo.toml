@@ -1,0 +1,20 @@
+[package]
+name = "poe-zk"
+version = "0.1.0"
+edition = "2021"
+description = "PoE proof layer: FRI-STARK over Goldilocks (Plonky3) for the kernel's six proof bindings (BUILD_FLOW Step 5)."
+
+[dependencies]
+p3-air = "0.3"
+p3-field = "0.3"
+p3-matrix = "0.3"
+p3-goldilocks = "0.3"
+p3-fri = "0.3"
+p3-uni-stark = "0.3"
+p3-challenger = "0.3"
+p3-commit = "0.3"
+p3-merkle-tree = "0.3"
+p3-symmetric = "0.3"
+p3-keccak = "0.3"
+p3-dft = "0.3"
+rand = { version = "0.9", features = ["small_rng"] }

@@ -1,0 +1,8 @@
+[package]
+name = "poe-wallet"
+version = "0.1.0"
+edition = "2021"
+description = "PoE wallet core: the 1 KiB Existence Container, line-key offline shows with double-show extraction, merchant offline policy, slot vouchers, 1-2-5 splitting (BUILD_FLOW Step 8)."
+
+[dependencies]
+poe-crypto = { path = "../poe-crypto" }

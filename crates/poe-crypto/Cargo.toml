@@ -1,0 +1,11 @@
+[package]
+name = "poe-crypto"
+version = "0.1.0"
+edition = "2021"
+description = "PoE crypto carriers: the seed-exact domain-separated SHAKE256 hash H, Merkle commitments, hash-chain tickets, XMSS vote keys with crash-safe one-time-leaf state, and post-quantum signature/KEM backends."
+
+[dependencies]
+sha3 = "0.10"
+fips203 = "0.4"
+fips204 = "0.4"
+rand = "0.8"

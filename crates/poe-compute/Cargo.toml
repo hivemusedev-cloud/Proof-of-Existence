@@ -1,0 +1,10 @@
+[package]
+name = "poe-compute"
+version = "0.1.0"
+edition = "2021"
+description = "PoE Compute Fibre: deterministic kernels (exact int lane + strict binary32 lane) ported from the Python seed, piecewise Merkle commitments, job claims and the triaxial audit (BUILD_FLOW Step 11)."
+
+[dependencies]
+poe-crypto = { path = "../poe-crypto" }
+poe-kernel = { path = "../poe-kernel" }
+sha3 = "0.10"
