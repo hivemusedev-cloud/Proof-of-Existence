@@ -345,3 +345,22 @@ operations.
 - The local launcher no longer wipes on start: plain starts resume
   from finstate (bundle as fallback), which is what the
   kill/resume drill exercises from here on.
+- **Railway landed on the fork lineage, not the anchor** (same
+  evening): its volume checkpoint was a bundle from the fork the
+  first tester marched with it earlier in the day (epoch 162,
+  minted 300000000499998 — the canonical 399999 plus that fork's
+  99,999 grant). The entrypoint fetched the epoch-209 anchor and
+  wiped the store, but a mid-boot container recycle plain-started
+  and the binary's fallback synced from the stale checkpoint
+  (README correction 21). The entrypoint now installs the fetched
+  bundle as the node's own checkpoint; POE_BUNDLE_URL was pointed
+  back at `testnet/bundle.bin` (the same anchor bytes) to trigger
+  a clean re-sync. The fork lineage is abandoned: sequential
+  finality means its nodes can never rejoin this chain; their
+  data dirs stay as evidence.
+- **DAG memory ceiling measured:** a node holding the epoch-209
+  state sits at ~4.9 GB RSS (poe-dag keeps a full ancestor set
+  per block; growth is quadratic in chain length). The operator
+  VM therefore runs ONE local node now (node1; node2/3 stopped) —
+  the three-node local mesh is retired until the ancestor
+  representation is bounded. See the README's open finding.

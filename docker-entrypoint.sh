@@ -35,6 +35,15 @@ if [ -n "${POE_BUNDLE_URL:-}" ]; then
         echo "[entrypoint] fetching sync bundle: $POE_BUNDLE_URL"
         curl -fsSL "$POE_BUNDLE_URL" -o /tmp/bundle.bin
         rm -rf "$DIR/store" "$DIR/finstate.bin"
+        # Install the fetched bundle as the node's own checkpoint
+        # too: if the container recycles mid-boot, the next start
+        # finds the marker already applied and plain-starts — and a
+        # plain start's fallback syncs from $DIR/bundle.bin. Without
+        # this copy, a stale checkpoint from a previous lineage
+        # shadows the fetched anchor (seen 2026-11-14: a recycled
+        # start silently resumed a fork bundle at epoch 162 instead
+        # of the epoch-209 anchor it had just fetched).
+        cp /tmp/bundle.bin "$DIR/bundle.bin"
         SYNC="--sync-from /tmp/bundle.bin"
         printf %s "$POE_BUNDLE_URL" > "$MARKER"
     fi

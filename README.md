@@ -406,8 +406,41 @@ kernel and money rules are again untouched:
     mesh-formation race was never re-served: the owner raced on,
     the loser held forever (an anchor deadlock). A node now
     extends its serve window whenever a peer's announced position
-    is behind its own, and resumed nodes take the same catch-up
+    is behind its own, starts the serve range at that peer's
+    position (known machines included, not just new
+    registrations), and resumed nodes take the same catch-up
     dwell as synced ones on rounds they have not finalized.
+20. **Buffered reveals starved the holds (found at the redeploy).**
+    Inbound reveals are buffered until their machine registers,
+    and the buffer was flushed only at fixed points in the round
+    loop — never inside the pump that every wait uses. Two nodes
+    holding the same round for each other's reveals therefore
+    deadlocked with the material already in their buffers. The
+    pump now flushes after every poll, re-publishes the node's
+    own reveal for a held round (with a fresh nonce, or gossip
+    suppresses the repeat), and re-dials configured peers every
+    ~20 s — a peer connection dropped during a hold (or a peer
+    that was redeploying at startup) no longer isolates a held
+    node forever.
+21. **Entrypoint checkpoint shadowing (found at the redeploy).**
+    The Railway entrypoint fetched a new anchor bundle and wiped
+    the chain state, but left the node's own stale `bundle.bin`
+    checkpoint in place; when the container recycled mid-boot,
+    the second start plain-started and its fallback synced from
+    the stale checkpoint — a *fork* bundle (epoch 162) — instead
+    of the anchor it had just fetched (epoch 209). The fetched
+    bundle is now installed as the node's own checkpoint too.
+
+**Open finding — DAG memory (not fixed).** `poe-dag` keeps a full
+ancestor set per block; at the epoch-209 bundle (33k blocks) a
+node's steady memory is ~4.9 GB and grows quadratically with
+chain length. One node per 8 GB host is the practical limit at
+this size, and restarts of several nodes on one host kill each
+other during replay. The fix is a bounded ancestor
+representation in `poe-dag` (with a replay-equivalence test
+against a recorded bundle as its gate) — future work, recorded
+here rather than patched unilaterally at the end of a long
+deploy.
 
 Full workspace suite after all corrections: **75/75 tests
 pass** (2026-11-14). The liveness finding above stands unchanged:
@@ -432,10 +465,25 @@ machines runs green (`crates/poe-finality/tests/simnet_scale.rs`);
 a Docker simnet was attempted — the daemon runs in this VM, but
 registry pulls are blocked by the sandbox's egress policy and the
 VM's RAM would cap real node containers at ~3 regardless. The
-Step 10 composition proof (Lean): in progress — a proof attempt
-against the unmodified kernel definitions is under way; this
-section is updated with its outcome (proved statement and axiom
-check, or the exact gap) when it lands.
+Step 10 composition proof (Lean): DONE, with a proved design
+gap. The composition layer (`PoE_Composition.lean`, with the
+renewal-act extension files in the build tree; COMPOSITION.md
+there has the full account, compile log and axiom receipts —
+propext/Quot.sound only, no sorry) proves unconditionally for
+the composed liquidity machine: the full liquidity invariant,
+live coin ≤ 10¹⁵, minted = live + burned, the emission-curve
+schedule in the machine's own closes, and pool/escrow solvency.
+It also proves the tokenomics envelope — including the
+first-year grant bound of 520,200,000,000 — only CONDITIONALLY,
+and proves why no stronger statement is available: the
+envelope is stated for histories handing the module cap
+(`kernelCap` ≤ 100,000 always), while the machine's closes hand
+the oracle cap (`vcap` = 400,000,000 on an empty price
+history); the two caps diverge, and the machine's first close
+provably breaks the module discipline. Closing the gap is a
+design step for the authors (hand `min (vcap) (kernelCap)` at
+closes, or prove an envelope for oracle-capped histories) — the
+audited files were not changed to force it.
 
 ## Run
 

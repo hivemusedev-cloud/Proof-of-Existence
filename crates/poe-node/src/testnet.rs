@@ -874,6 +874,8 @@ struct Node {
     /// the peer is still deriving its keys (or down) is lost, and a
     /// node that never connects silently runs a solo chain.
     peer_addrs: Vec<libp2p::Multiaddr>,
+    /// Last peer re-dial inside pump_until (see there).
+    last_redial_ms: u128,
     keys: Keys,
     my_announcement: Announcement,
     announcements: BTreeMap<u64, Announcement>,
@@ -1377,6 +1379,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         fin,
         net,
         peer_addrs,
+        last_redial_ms: 0,
         keys,
         my_announcement: my_announcement.clone(),
         announcements: BTreeMap::new(),
@@ -1540,6 +1543,28 @@ impl Node {
                 Ok(Some(inb)) => self.handle_inbound(inb),
                 Ok(None) | Err(_) => {}
             }
+            // Inbound reveals are buffered, not submitted (their
+            // machine may not be registered yet). Flush on EVERY
+            // pump: the dwell/hold loops below decide from the
+            // finality state, and a reveal that only lands in the
+            // buffer never releases a hold — two nodes holding the
+            // same round for each other's reveals deadlocked exactly
+            // this way at the 2026-11-14 re-anchor (each sitting on
+            // the other's buffered reveal, neither able to see it).
+            self.flush_reveals();
+            // Long waits live inside this pump (holds, dwells, the
+            // finality gate), and the periodic peer re-dial sits in
+            // the round loop — a node held in a round whose peer
+            // connection dropped (or whose peer was redeploying when
+            // it dialed at startup) would wait forever, connected to
+            // nobody. Re-dial here too; dialing skips connected
+            // peers, so this is a no-op in a healthy mesh.
+            if now_ms >= self.last_redial_ms + 20_000 {
+                self.last_redial_ms = now_ms;
+                for a in self.peer_addrs.clone() {
+                    let _ = self.net.dial(a);
+                }
+            }
         }
     }
 
@@ -1602,21 +1627,26 @@ impl Node {
         for a in &pending {
             if self.register_announcement(a, epoch) {
                 new_machine = true;
+            }
+            // A peer whose announced position is behind mine needs
+            // history I hold: extend my serve window to cover its
+            // gap, and let the serve range start at its position.
+            // (The serve cursor used to learn positions only from
+            // NEW registrations — a known machine returning behind,
+            // e.g. an operator node rejoining after a redeploy, was
+            // served only the frontier's own epoch and stranded.)
+            // Without the window extension, a finstate-resumed
+            // node's serve window stayed shut (it is raised for
+            // bundle joiners and new registrations only), and a
+            // reveal or vote lost in a mesh-formation race was never
+            // re-served — the loser held its round forever while
+            // the owner raced on (the 2026-11-14 anchor deadlock).
+            if a.sync_hint < self.next_apply {
+                self.history_until = self.history_until.max(self.next_apply + rpe);
                 self.catchup_from = Some(match self.catchup_from {
                     Some(h) => h.min(a.sync_hint),
                     None => a.sync_hint,
                 });
-            }
-            // A peer whose announced position is behind mine needs
-            // history I hold: extend my serve window to cover its
-            // gap. Without this, a finstate-resumed node's serve
-            // window stayed shut (it is raised for bundle joiners
-            // and new registrations only), and a reveal or vote lost
-            // in a mesh-formation race was never re-served — the
-            // loser held its round forever while the owner raced on
-            // (the 2026-11-14 anchor deadlock).
-            if a.sync_hint < self.next_apply {
-                self.history_until = self.history_until.max(self.next_apply + rpe);
             }
         }
         if new_machine {
@@ -1674,6 +1704,7 @@ impl Node {
             if round_end <= now_ms {
                 let dwell_end = now_ms + 2500;
                 let mut last_hold_log = 0u128;
+                let mut last_repush = 0u128;
                 let mut anchor_reveal_sent = false;
                 let mut material_since: Option<u128> = None;
                 loop {
@@ -1731,6 +1762,26 @@ impl Node {
                         .duration_since(UNIX_EPOCH)
                         .map(|d| d.as_millis())
                         .unwrap_or(0);
+                    // While holding, keep re-publishing my own
+                    // reveal for this round: the serve block that
+                    // would re-serve it sits AFTER this dwell in the
+                    // same call, and the one-shot publish at the top
+                    // of the round can be lost in a mesh-formation
+                    // race — two nodes holding the same round for
+                    // each other's reveals would otherwise wait
+                    // forever, each sitting on the material the
+                    // other needs.
+                    if now_ms >= last_repush + 5_000
+                        && self.fin.reveal_of(self.keys.machine, round).is_some()
+                        && (round as usize) + 1 < CHAIN_LEN
+                    {
+                        let link = self.keys.chain.reveal((round + 1) as usize);
+                        let _ = self.net.publish(
+                            TOPIC_BLOCKS,
+                            reveal_msg(self.keys.machine, round, &link, now_ms as u64),
+                        );
+                        last_repush = now_ms;
+                    }
                     let step_end = if now_ms < dwell_end {
                         (now_ms + 150).min(dwell_end)
                     } else {
@@ -1786,6 +1837,7 @@ impl Node {
         // and reveals keep landing) until any peer material exists.
         if settled {
             let mut last_hold_log = 0u128;
+            let mut last_repush = 0u128;
             while !self.peer_material(round) {
                 let now_ms = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -1796,6 +1848,20 @@ impl Node {
                         "HOLD round {round}: no peer material — refusing to close this round on my own reveals alone"
                     );
                     last_hold_log = now_ms;
+                }
+                // Same re-publish as the catch-up dwell: while I
+                // hold, my own reveal for this round may be exactly
+                // the material a peer is holding for.
+                if now_ms >= last_repush + 5_000
+                    && self.fin.reveal_of(self.keys.machine, round).is_some()
+                    && (round as usize) + 1 < CHAIN_LEN
+                {
+                    let link = self.keys.chain.reveal((round + 1) as usize);
+                    let _ = self.net.publish(
+                        TOPIC_BLOCKS,
+                        reveal_msg(self.keys.machine, round, &link, now_ms as u64),
+                    );
+                    last_repush = now_ms;
                 }
                 self.pump_until(now_ms + 150).await;
             }

@@ -115,6 +115,27 @@ the operator, fixed 2026-11-14 with regression tests:
    Fixed: nodes extend their serve window whenever a peer's
    announced position trails their own, and resumed nodes take
    the catch-up dwell on rounds they have not finalized.
+7. **Buffered-reveal deadlock (liveness, found at the redeploy).**
+   Inbound reveals sit in a buffer until their machine registers;
+   the buffer was never flushed inside the network pump every
+   wait uses, so two nodes holding a round for each other's
+   reveals deadlocked with the material already buffered. Fixed:
+   the pump flushes after every poll; held rounds re-publish
+   their own reveal with a fresh nonce; the pump re-dials
+   configured peers periodically.
+8. **Entrypoint checkpoint shadowing (operations, found at the
+   redeploy).** The container entrypoint's bundle fetch left a
+   stale checkpoint in the data volume; a mid-boot container
+   recycle plain-started and synced from the stale (fork)
+   checkpoint instead of the fetched anchor. Fixed: the fetched
+   bundle is installed as the node's checkpoint too.
+
+**Open (not fixed): DAG memory growth.** `poe-dag` keeps a full
+ancestor set per block — measured ~4.9 GB steady state for the
+33k-block epoch-209 state, growing quadratically. A bounded
+ancestor representation (gated by a replay-equivalence test
+against a recorded bundle) is owed before the testnet grows
+much further; see the README's open finding.
 
 An auditor should re-derive each of these from the code and the
 issue history rather than trusting this summary, and should look
