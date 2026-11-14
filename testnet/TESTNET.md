@@ -88,6 +88,7 @@ any node can serve as a peer; these are conveniences, not authorities:
 - `/ip4/104.29.200.165/tcp/41001/p2p/12D3KooWLrxxWtsDSX4d3xVswbPVSLmS1PxNpDiFBgwtCx62gVGQ` (machine 1123122162023658167)
 - `/ip4/104.29.200.165/tcp/41002/p2p/12D3KooWEjHriRjvC6R6pp5JaWWCtFMVV5S3EhXxU8pJUNF87u7g` (machine 11887545442228343284)
 - `/ip4/104.29.200.165/tcp/41003/p2p/12D3KooWKZZ92UqEHSv6tJShiJThSQs7reBHgUbWMoD6WRUghaKf` (machine 13754866497659891996 — a rotated identity: the original third bootstrap's keys were lost during operations on 2026-11-14; the fresh identity joined the running chain in epoch 76, see the operations log)
+- `/dns4/tokaido.proxy.rlwy.net/tcp/56783/p2p/12D3KooWAqhtJPPgr3W5ryARp6CtYxLdTuEoQvsz2W79H8jGDVpC` (machine 17293328633672825831 — **the public bootstrap**, hosted on Railway since 2026-11-14 08:28 +06; this one *is* reachable from the public internet via Railway's TCP proxy. It synced from the epoch-113 bundle published in this repository at `testnet/bundle.bin`; see `RAILWAY.md` for the deployment. Its own join lands once the network reaches live rounds — see the operations log.)
 
 **Reachability, stated plainly:** the operator's VM sits behind NAT
 with no inbound port mapping. External TCP checks (check-host.net,
@@ -221,3 +222,57 @@ once-ever and there is no deregistration). Ghosts never reveal, so
 they are never drawn into committees; they only dilute the draw
 denominator. The ledger currently carries a handful from launch
 operations.
+
+### Operations log — 2026-11-14, morning: Railway bootstrap, and the resume wedge
+
+- **A public bootstrap exists.** A fourth node (machine
+  17293328633672825831) was deployed to Railway from this repository
+  (see `RAILWAY.md`) and started 2026-11-14 08:28 +06, synced from
+  the epoch-113 bundle now published at `testnet/bundle.bin` in this
+  repo. It is reachable at the `/dns4/tokaido.proxy.rlwy.net/...`
+  address in the bootstrap list above. The three NAT'd bootstraps
+  peer with it outbound, so the mesh has a public front door for the
+  first time.
+- **The operator VM was replaced several times** during the morning
+  (roughly 04:58, 05:09, 07:20, 09:05 +06), each time wiping the
+  systemd units (they live outside the workspace) and killing the
+  nodes; node processes are also periodically SIGKILLed by the
+  platform and relaunched by systemd. Chain data lives in the
+  workspace and survived every replacement; finalised state was
+  never lost.
+- **New finding — the finstate resume path wedges (implementation
+  bug, reproduced 4×).** A node that resumes from its saved
+  `finstate.bin` never advances past its resume round: observed at
+  rounds 1837 (two nodes), 1853, 1872 and 1874. A node that starts
+  fresh from an epoch bundle advances through the same rounds every
+  time. Controlled A/B: one node's fresh instance was advancing at
+  round 1874; its supervised successor resumed from the finstate the
+  fresh instance wrote and froze at 1874. The earlier stalls at
+  rounds 752–1528 were attributed to lost committee votes; at least
+  the 1837 stall is now shown to be this resume wedge instead — a
+  fresh replay of that round finalises from the same served history.
+  The wedge cost the network its epochs 114–116 for several hours:
+  two finstate-resumed nodes sat at 1837 while a bundle-fresh node
+  closed epoch 114 alone (root `0587521404eaae91`).
+- **Convergence after the fix:** all three operator nodes were
+  restarted fresh from bundles. Independent fresh replays agree
+  exactly: epoch 114 root `0587521404eaae91`, epoch 115 root
+  `528733ebf31aa1dd`, epoch 116 root `eac66732ae18a099` on all three
+  nodes. There is no fork; the credited=2 epoch-114 close seen in a
+  pre-rollback filesystem state was superseded by the canonical
+  credited=1 replay.
+- **Operator mitigation (no protocol change):** the local launcher
+  now always starts each node fresh from its own latest bundle
+  (rewritten at every epoch close it performs), discarding only the
+  unfinalised tail — the re-anchor mechanic, automated per node.
+  Under it, all three nodes advance together again and survive the
+  platform's kill cycle. The Railway entrypoint shares the latent
+  issue: a Railway restart that resumes from its volume would wedge
+  the same way; it has not restarted since its bundle start.
+  A code-level fix for the resume path is owed and is a decision for
+  the protocol's authors, like the liveness mechanism above.
+- The network is replaying a backlog (epoch ~118 against a wall
+  clock of ~269 at the time of writing) accumulated over the
+  morning's outages. The Railway node's join, and any new joiner's,
+  lands when the mesh reaches live rounds; an operator re-anchor
+  remains the shortcut, at the usual cost of the unfinalised tail.
