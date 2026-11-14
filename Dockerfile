@@ -8,6 +8,9 @@
 # The node keeps ALL of its state in one directory (identity keys,
 # store, finality snapshots, epoch bundles). Mount a volume at
 # /data or the node re-identifies and re-syncs on every restart.
+# NOTE: no `VOLUME` instruction here on purpose — Railway's builder
+# rejects it ("use Railway Volumes"); on plain Docker hosts, mount
+# with `-v poe-data:/data` instead.
 
 FROM rust:bookworm AS builder
 RUN apt-get update \
@@ -26,6 +29,5 @@ RUN apt-get update \
 COPY --from=builder /usr/local/bin/poe-node /usr/local/bin/poe-node
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-VOLUME ["/data"]
 EXPOSE 41001/tcp
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
