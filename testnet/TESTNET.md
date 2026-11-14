@@ -100,6 +100,8 @@ operator's network path changes). Practical ways in today:
 - Run a node on any host with a public inbound port (a cheap VPS
   works) and share its `--listen` address as a peer for others —
   the network is whoever is running it.
+- Or run it on Railway, whose TCP proxy needs no public host of
+  your own: full walkthrough in [RAILWAY.md](RAILWAY.md).
 - On a LAN, nodes find each other automatically via mDNS: start
   with no `--peer` at all.
 - Two NATed nodes cannot dial each other directly yet (no relay or

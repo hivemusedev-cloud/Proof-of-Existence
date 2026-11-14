@@ -48,6 +48,15 @@ const ROOT_SK_HEX: &str = include_str!("../testnet-root-sk.hex");
 
 pub const XMSS_HEIGHT: u32 = 15;
 pub const CHAIN_LEN: usize = 20_001;
+/// How much finalized history a node retains and re-serves for
+/// catching-up peers, in epochs. A bundle sync is only useful while
+/// the gap between the bundle's epoch and the frontier fits inside
+/// this window, so it is sized in hours, not minutes: 512 epochs at
+/// ~48 s is ~6.8 hours — a shipped bundle survives a slow deploy.
+/// The cost is memory (the retained window is held anyway by the
+/// DAG/finality state at this scale), the benefit is that joining
+/// does not require split-second timing.
+pub const HISTORY_RETENTION_EPOCHS: u64 = 512;
 
 // -- hex ---------------------------------------------------------------------
 
@@ -1453,8 +1462,9 @@ impl Node {
         // that round's reveal collection, so it does not act in it.
         let mut observing = self.observe_until.map(|u| round <= u).unwrap_or(false);
 
-        // Bound the retained history to the last two epochs.
-        self.fin.prune_before(round.saturating_sub(16 * rpe));
+        // Bound the retained history (see HISTORY_RETENTION_EPOCHS).
+        self.fin
+            .prune_before(round.saturating_sub(HISTORY_RETENTION_EPOCHS * rpe));
         // Registrations land at round boundaries only, so every node
         // samples committees from the same machine set.
         let pending = std::mem::take(&mut self.pending_ann);
@@ -1647,7 +1657,7 @@ impl Node {
             // own clock and lags the publisher's by an epoch or two,
             // so serving only the publisher's current epoch strands
             // it with subset committees and a solo fork.
-            let floor = round.saturating_sub(16 * rpe);
+            let floor = round.saturating_sub(HISTORY_RETENTION_EPOCHS * rpe);
             let from = match self.catchup_from {
                 Some(h) => (h - (h % rpe)).max(floor),
                 None => round - (round % rpe),
