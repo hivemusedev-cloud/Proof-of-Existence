@@ -1,0 +1,4 @@
+module poe_mobileFFI {
+    header "poe_mobileFFI.h"
+    export *
+}

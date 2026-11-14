@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/poe-kernel", "crates/poe-crypto", "crates/poe-store", "crates/poe-dag", "crates/poe-zk", "crates/poe-epoch", "crates/poe-identity", "crates/poe-finality", "crates/poe-wallet", "crates/poe-msg", "crates/poe-v2", "crates/poe-compute", "crates/poe-net", "crates/poe-node"]
+members = ["crates/poe-kernel", "crates/poe-crypto", "crates/poe-store", "crates/poe-dag", "crates/poe-zk", "crates/poe-epoch", "crates/poe-identity", "crates/poe-finality", "crates/poe-wallet", "crates/poe-msg", "crates/poe-v2", "crates/poe-compute", "crates/poe-net", "crates/poe-node", "crates/poe-mobile"]
 
 [workspace.package]
 edition = "2021"

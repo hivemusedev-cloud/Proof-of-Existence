@@ -342,13 +342,100 @@ has no inbound reachability (see `testnet/TESTNET.md`). The
 chain's current position and bootstrap identities are kept
 current in `testnet/TESTNET.md`, not here.
 
+### Live-network corrections, third round — the issue #1 fixes (2026-11-14)
+
+The first external tester (issue #1) and a scale simnet found the
+next layer. All fixes are in the node/finality implementation; the
+kernel and money rules are again untouched:
+
+13. **Hold, never solo-close.** The catch-up dwell (correction 8)
+    waited a bounded 2.5 s for peer material and then closed the
+    round anyway — on a reveal set containing only the node
+    itself, which samples itself as committee and finalizes a
+    private fork (the tester's epoch 114 diverged from canonical
+    exactly at his own join). A round with no peer material is now
+    HELD — pumped, logged, never closed — on the catch-up path and
+    on the live path alike. A node that cannot see peers stalls;
+    it does not fork.
+14. **The resume wedge.** A node resuming from `finstate.bin`
+    pre-marked every round up to its apply point as already
+    voted — including the first unfinalized round, whose vote is
+    only cast in the *next* round's processing. The resumed node
+    therefore never cast that vote, and the round sat one vote
+    short forever whenever the vote was quorum-critical
+    (reproduced at rounds 1837, 1853, 1872, 1874). Only finalized
+    rounds are pre-marked now, and every cast vote is persisted in
+    the same round it is cast, so a resume re-casts the identical
+    claim (a duplicate everywhere), never a different one. The
+    finstate format is versioned (POEFIN2); an unreadable finstate
+    degrades to the epoch bundle instead of bricking the node.
+15. **Iterative GHOSTDAG ordering.** The ordering walk recursed
+    over the selected-parent chain; its depth grows with retained
+    history, and it overflowed a Windows node's 1 MB main-thread
+    stack mid-replay (issue #1, finding 2). The walk is iterative
+    now, proven order-equivalent to the recursion by a property
+    test over random DAGs, plus a 4,000-deep chain ordered on a
+    256 KB stack as a regression test.
+16. **Frozen draw denominators.** Committee and proposer ticket
+    draws divided by the *live* count of active machines — a
+    number that changes as revocations land, so two nodes holding
+    the same blocks could disagree about whether a proposal was
+    legitimate and build different DAGs. Invisible at 10 machines
+    (target ≥ active: the draw always wins); exposed by the new
+    100-machine simnet, whose two insertion orders diverged. Each
+    round's denominator is now frozen at its reveal close, from
+    its own participant set, and carried in the finstate.
+17. **Catch-up pace.** History serving walked 16 rounds per
+    server round; a deep joiner's pace was slice-bound at ~5
+    rounds/min against a 20 rounds/min wall clock, so its backlog
+    *grew*. Slices are 64 rounds now (see SERVE_SLICE_ROUNDS),
+    putting a deep replay comfortably ahead of the wall.
+18. **The anchor round (found at the redeploy).** A bundle-synced
+    node observes its anchor round — it "missed" the collection.
+    After an operator re-anchor (t0 shifted), that is wrong: the
+    round's window moved with t0 and *nobody* collected it, so
+    every synced node sat the round out and the chain held at the
+    anchor forever. If the dwell for an observed round expires
+    with no peer material anywhere, the node now contributes its
+    own reveal late and plays the round (the hold still applies —
+    it closes only once a peer's material joins), with a short
+    settle so slower peers' late reveals land before the close.
+19. **Serve-behind, and dwell on resume (found at the redeploy).**
+    History re-serving is push-only, and a finstate-resumed node's
+    serve window stayed shut — so a reveal or vote lost in a
+    mesh-formation race was never re-served: the owner raced on,
+    the loser held forever (an anchor deadlock). A node now
+    extends its serve window whenever a peer's announced position
+    is behind its own, and resumed nodes take the same catch-up
+    dwell as synced ones on rounds they have not finalized.
+
+Full workspace suite after all corrections: **75/75 tests
+pass** (2026-11-14). The liveness finding above stands unchanged:
+these fixes remove implementation stalls and forks, not the
+design's missing liveness mechanism.
+
 ## Residue (not done, not claimed)
 
-Step 12b (Docker simnet at scale — no Docker in the build VM; the
-in-process Byzantine simnet covers chaos at protocol level), Step 12d
-(external audit + bug bounty), Step 12e (mainnet genesis ceremony),
-the Step 5 external ZK security review and phone benchmarks, the
-Step 10 composition proof (Lean), and the Step 7 mobile shells.
+Step 12d's external audit itself (the audit-ready package is
+written: `AUDIT_PACKAGE.md`; engaging an auditor and setting the
+bounty reward are the owner's steps), Step 12e (mainnet genesis
+ceremony), the Step 5 external ZK security review, phone
+benchmarks, and binding of the proved fold to the node's
+accumulator hash H (VM-CPU prove/verify timings are recorded in
+`crates/poe-zk/BENCHMARKS.md`), and the Step 7 Android/iOS app
+projects (the shell core exists and is verified: `crates/poe-mobile`
+— Rust core tested, Kotlin bindings generated, compile-checked and
+run-checked on the JVM, Swift bindings generated but not compiled
+for lack of a Swift toolchain here). Step 12b is done in
+substance: a 100-machine in-process simnet with 30% Byzantine
+machines runs green (`crates/poe-finality/tests/simnet_scale.rs`);
+a Docker simnet was attempted — the daemon runs in this VM, but
+registry pulls are blocked by the sandbox's egress policy and the
+VM's RAM would cap real node containers at ~3 regardless. The
+Step 10 composition proof (Lean): in progress — a proof attempt
+against the unmodified kernel definitions is under way; this
+section is updated with its outcome (proved statement and axiom
+check, or the exact gap) when it lands.
 
 ## Run
 

@@ -91,6 +91,19 @@ pub struct Finality {
     /// Ticket links revealed per (round, machine).
     reveals: HashMap<(u64, u64), H512>,
     committees: HashMap<u64, Vec<u64>>,
+    /// The draw denominator frozen for each closed round: how many
+    /// machines had revealed for the round when it closed. Every
+    /// draw for a round (committee, proposer) uses THIS number —
+    /// never the live active count, which keeps changing as
+    /// revocations and registrations land. With a live denominator,
+    /// two nodes holding the same blocks can disagree on whether a
+    /// block was a legitimate proposal, insert different subsets,
+    /// and end up with different DAGs: consensus divergence from
+    /// arrival order alone (found by the 100-machine simnet,
+    /// 2026-11-14; invisible at 10 machines, where the draw always
+    /// wins). Frozen at close, the denominator is a function of the
+    /// round's closed reveal set, like the draws themselves.
+    draw_base: HashMap<u64, u64>,
     prop_regs: HashMap<u64, Registry>,
     vote_regs: HashMap<u64, Registry>,
     canonical_prop: HashMap<(u64, u64), BlockId>,
@@ -119,6 +132,7 @@ impl Finality {
             machines: BTreeMap::new(),
             reveals: HashMap::new(),
             committees: HashMap::new(),
+            draw_base: HashMap::new(),
             prop_regs: HashMap::new(),
             vote_regs: HashMap::new(),
             canonical_prop: HashMap::new(),
@@ -191,6 +205,25 @@ impl Finality {
         self.reveals.get(&(round, machine)).copied()
     }
 
+    /// Machines that have revealed for `round` — the round's
+    /// participant set, and the only denominator its draws may use.
+    fn participants(&self, round: u64) -> u64 {
+        self.reveals.keys().filter(|(r, _)| *r == round).count() as u64
+    }
+
+    /// The draw denominator for `round`: the participant count frozen
+    /// when the round closed here, or — before the close — the
+    /// participant count so far. A pre-close denominator is
+    /// provisional (the reveal set is still gathering); the node's
+    /// propose path treats pre-close NotProposer verdicts as
+    /// retryable for exactly this reason.
+    fn draw_denominator(&self, round: u64) -> u64 {
+        self.draw_base
+            .get(&round)
+            .copied()
+            .unwrap_or_else(|| self.participants(round))
+    }
+
     /// The reveal phase: a machine shows the ticket link for `round`
     /// (chain step `round + 1`). Verified against the committed chain tip —
     /// a link that does not hash forward to the commitment is refused.
@@ -211,7 +244,12 @@ impl Finality {
     pub fn close_round_reveals(&mut self, round: u64) -> &[u64] {
         if !self.committees.contains_key(&round) {
             let beacon = self.beacon("beacon-comm", round);
-            let active = self.active_count();
+            // Freeze the round's draw denominator NOW, from its
+            // reveal set, and sample with it: after this close, no
+            // revocation or registration may move the arithmetic of
+            // this round's draws (see the draw_base field doc).
+            let active = self.participants(round);
+            self.draw_base.insert(round, active);
             let mut members: Vec<u64> = self
                 .machines
                 .keys()
@@ -263,6 +301,7 @@ impl Finality {
     /// window is what bundle-synced peers still need re-served.
     pub fn prune_before(&mut self, round: u64) {
         self.reveals.retain(|(r, _), _| *r >= round);
+        self.draw_base.retain(|r, _| *r >= round);
         self.voters.retain(|(r, _), _| *r >= round);
         self.vote_store.retain(|(_, r), _| *r >= round);
     }
@@ -294,7 +333,7 @@ impl Finality {
         }
         let link = self.draw_link(machine, round).ok_or(FinError::BadReveal)?;
         let beacon = self.beacon("beacon-prop", round);
-        if !draw_wins(ticket_score(&beacon, &link), 16, self.active_count()) {
+        if !draw_wins(ticket_score(&beacon, &link), 16, self.draw_denominator(round)) {
             return Err(FinError::NotProposer);
         }
         match self.dag.insert(block.clone()) {
@@ -604,6 +643,7 @@ pub struct FullSnapshot {
     pub base: FinalitySnapshot,
     pub floor_round: u64,
     pub committees: Vec<(u64, Vec<u64>)>,
+    pub draw_base: Vec<(u64, u64)>,
     pub reveals: Vec<(u64, u64, H512)>,
     pub vote_store: Vec<(u64, u64, Vote)>,
     pub voters: Vec<(u64, BlockId, Vec<u64>)>,
@@ -705,6 +745,12 @@ impl Finality {
                 .filter(|(r, _)| **r >= floor)
                 .map(|(r, c)| (*r, c.clone()))
                 .collect(),
+            draw_base: self
+                .draw_base
+                .iter()
+                .filter(|(r, _)| **r >= floor)
+                .map(|(r, n)| (*r, *n))
+                .collect(),
             reveals: self
                 .reveals
                 .iter()
@@ -756,6 +802,9 @@ impl Finality {
         let mut fin = Finality::restore(snap.base);
         for (r, c) in snap.committees {
             fin.committees.insert(r, c);
+        }
+        for (r, n) in snap.draw_base {
+            fin.draw_base.insert(r, n);
         }
         for (r, m, l) in snap.reveals {
             fin.reveals.insert((r, m), l);

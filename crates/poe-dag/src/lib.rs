@@ -246,18 +246,39 @@ impl Dag {
     }
 
     fn append_order(&self, b: BlockId, out: &mut Vec<BlockId>, seen: &mut HashSet<BlockId>) {
-        if seen.contains(&b) {
-            return;
+        // Iterative post-order walk with an explicit stack. The
+        // recursive original overflowed the main-thread stack on
+        // Windows (1 MB) once the selected-parent chain grew long —
+        // a replaying node's chain grows with its retained history,
+        // so the recursion depth was unbounded (issue #1, Finding 2:
+        // a node died mid-replay after closing epoch 181). This walk
+        // emits exactly the recursive order: chosen subtree first,
+        // then mergeset_order as listed, the block itself last;
+        // `seen` is checked on entry and marked at emission, as
+        // before. Equivalence is pinned by a property test against a
+        // recursive reference (see the tests module).
+        let mut stack: Vec<(BlockId, bool)> = vec![(b, false)];
+        while let Some((id, expanded)) = stack.pop() {
+            if expanded {
+                seen.insert(id);
+                out.push(id);
+                continue;
+            }
+            if seen.contains(&id) {
+                continue;
+            }
+            let g = &self.ghost[&id];
+            stack.push((id, true));
+            // LIFO: push children in reverse processing order — the
+            // mergeset entries reversed, then the chosen parent on
+            // top so its subtree is processed first.
+            for x in g.mergeset_order.iter().rev() {
+                stack.push((*x, false));
+            }
+            if let Some(c) = g.chosen {
+                stack.push((c, false));
+            }
         }
-        let g = &self.ghost[&b];
-        if let Some(c) = g.chosen {
-            self.append_order(c, out, seen);
-        }
-        for x in &g.mergeset_order {
-            self.append_order(*x, out, seen);
-        }
-        seen.insert(b);
-        out.push(b);
     }
 }
 
@@ -357,6 +378,114 @@ mod tests {
         for b in &all {
             assert_eq!(other.blue_score(&b.id), gen.blue_score(&b.id), "blue scores must agree");
         }
+    }
+
+    /// The pre-fix recursive append_order, kept as the reference the
+    /// iterative walk must match EXACTLY (same emission order) on
+    /// every DAG shape.
+    fn reference_append(d: &Dag, b: BlockId, out: &mut Vec<BlockId>, seen: &mut HashSet<BlockId>) {
+        if seen.contains(&b) {
+            return;
+        }
+        let g = &d.ghost[&b];
+        if let Some(c) = g.chosen {
+            reference_append(d, c, out, seen);
+        }
+        for x in &g.mergeset_order {
+            reference_append(d, *x, out, seen);
+        }
+        seen.insert(b);
+        out.push(b);
+    }
+
+    fn reference_linearize(d: &Dag) -> Vec<BlockId> {
+        let mut out: Vec<BlockId> = Vec::new();
+        let mut seen: HashSet<BlockId> = HashSet::new();
+        loop {
+            let next = d
+                .blocks
+                .keys()
+                .filter(|&id| !seen.contains(id))
+                .max_by(|a, b| d.blue_score(a).cmp(&d.blue_score(b)).then(b.cmp(a)))
+                .copied();
+            let Some(root) = next else { break };
+            reference_append(d, root, &mut out, &mut seen);
+        }
+        out
+    }
+
+    /// Property test: the iterative append_order produces the
+    /// recursive original's order on many pseudo-random DAG shapes
+    /// (forks, merges, diamonds — the shapes where a stack-based
+    /// walk most easily diverges from recursion).
+    #[test]
+    fn iterative_order_matches_recursive_reference() {
+        // xorshift64* — deterministic, no dependencies.
+        let mut state = 0x9E3779B97F4A7C15u64;
+        let mut next = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545F4914F6CDD1D)
+        };
+        for trial in 0..24 {
+            let mut d = Dag::new(3);
+            let g = blk(1, 0, vec![], 0);
+            let gid = g.id;
+            d.insert(g).unwrap();
+            let mut ids = vec![gid];
+            let n = 40 + (next() % 80);
+            for r in 1..n {
+                // 1..=3 distinct parents sampled from earlier blocks.
+                let want = 1 + (next() % 3) as usize;
+                let mut parents: Vec<BlockId> = Vec::new();
+                let mut guard = 0;
+                while parents.len() < want && guard < 16 {
+                    guard += 1;
+                    let cand = ids[(next() as usize) % ids.len()];
+                    if !parents.contains(&cand) {
+                        parents.push(cand);
+                    }
+                }
+                let b = blk((r % 5) + 1, r, parents, (r % 251) as u8);
+                ids.push(b.id);
+                d.insert(b).unwrap();
+            }
+            assert_eq!(
+                d.linearize(),
+                reference_linearize(&d),
+                "iterative order diverged from the recursive reference on trial {trial}"
+            );
+        }
+    }
+
+    /// Regression test for issue #1 Finding 2 (Windows stack
+    /// overflow): linearize a 4,000-deep selected-parent chain on a
+    /// thread with a 256 KB stack — far below what the recursive
+    /// walk needed per thousand blocks on a 1 MB main thread. The
+    /// iterative walk's own stack use is O(1) frames; its work list
+    /// lives on the heap.
+    #[test]
+    fn deep_chain_linearizes_on_a_small_stack() {
+        let handle = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let mut d = Dag::new(3);
+                let g = blk(1, 0, vec![], 0);
+                let mut prev = g.id;
+                let mut ids = vec![g.id];
+                d.insert(g).unwrap();
+                for r in 1..4000u64 {
+                    let b = blk(1, r, vec![prev], (r % 251) as u8);
+                    prev = b.id;
+                    ids.push(b.id);
+                    d.insert(b).unwrap();
+                }
+                let order = d.linearize();
+                assert_eq!(order, ids, "a chain must order as the chain");
+            })
+            .unwrap();
+        handle.join().unwrap();
     }
 }
 

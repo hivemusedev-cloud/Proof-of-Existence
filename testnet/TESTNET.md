@@ -16,7 +16,7 @@ here makes the protocol stronger before any mainnet exists.
 |---|---|
 | Name | `poe-testnet-1` |
 | Genesis hash | `6107532c003ef90c66a1fb1151436803600a7e3600c312b96e6639b4304ab35f9c6776a8dc9994cff8064a5122022a8edc7966956860cfbbd50e4360d4e3de8e` |
-| Genesis time (t0) | originally 2026-11-14 00:30:00 Asia/Dhaka (+06) (unix `1794594600`); the operator has since re-anchored the clock at epoch boundaries after liveness stalls (see *Operations log* below) — current t0 unix `1794608340`, under which round 1520 began 2026-11-14 05:35:00 +06. The genesis hash does not depend on t0 and is unchanged. |
+| Genesis time (t0) | originally 2026-11-14 00:30:00 Asia/Dhaka (+06) (unix `1794594600`); the operator has since re-anchored the clock at epoch boundaries after liveness stalls (see *Operations log* below) — current t0 unix `1794646677`, under which round 3360 (the epoch-209 boundary) began 2026-11-14 17:45:57 +06. The genesis hash does not depend on t0 and is unchanged. |
 | Profile | reference (pot ÷300, window 522, usage floor 1000), V1 fair launch |
 | Rounds | 3 seconds each, 16 per epoch (an epoch ≈ 48 seconds) |
 | Ordering | BlockDAG + GHOSTDAG (k = 3), ticket lottery (~16 expected proposers/round) |
@@ -276,3 +276,72 @@ operations.
   morning's outages. The Railway node's join, and any new joiner's,
   lands when the mesh reaches live rounds; an operator re-anchor
   remains the shortcut, at the usual cost of the unfinalised tail.
+
+## Operations log — 2026-11-14 (afternoon): issue #1 retest, and the fix batch
+
+- **Issue #1 retest (independent tester, Windows node).** With the
+  fresh epoch-179 bundle the node solo-forked again — epoch 180
+  `claimants=1, root=38d3b738…` against canonical `7078c959…`
+  (claimants=0); the divergence is exactly his join, the bundle is
+  byte-identical to the published one (1,822,628 bytes, sha256
+  cc1284f7…), and his minted total is canonical + his 99,999 grant.
+  Expected: the dwell fix was owed, not yet shipped. **New finding
+  2:** the node then died — `thread 'main' has overflowed its
+  stack` — after epoch 181; a Linux run from the same bundle
+  survived epochs 180–185. Verified mechanism: the GHOSTDAG
+  ordering walk (`Dag::append_order`) recursed over the
+  selected-parent chain with no depth bound; depth grows with
+  retained history, and the Windows main-thread stack (1 MB) is
+  8× smaller than Linux's (8 MB). Linux surviving that window is
+  not immunity.
+- **The fix batch (all implementation layer; kernel/money rules
+  untouched; README corrections 13–17).** (1) A round with no peer
+  material is HELD, never closed — the catch-up dwell's
+  fall-through is removed and the live close is gated the same
+  way. (2) The resume wedge, diagnosed to the line: the startup
+  `voted` pre-mark covered every round ≤ next_apply including the
+  first UNFINALIZED round, whose vote is cast only in the next
+  round's processing — so every finstate resume abstained on
+  exactly the round that needed its vote. (This corrects the
+  framing above: the wedge was an implementation bug, not a
+  design question.) Only finalized rounds are pre-marked now;
+  every cast vote is persisted at cast time; the finstate format
+  is versioned (POEFIN2) and an unreadable finstate degrades to
+  the epoch bundle. (3) `append_order` rewritten iteratively,
+  order-equivalence to the recursion proven by property test.
+  (4) Replay pace: history serve slices raised 16 → 64 rounds —
+  at 16, a deep joiner's slice-bound pace (~5 rounds/min) was
+  below the 20 rounds/min wall clock and its backlog grew.
+  (5) A sixth finding, from the new 100-machine simnet: committee
+  and proposer draws divided by the LIVE active-machine count,
+  which moves as revocations land — two nodes holding the same
+  blocks could build different DAGs. Each round's denominator is
+  now frozen at its reveal close from its own participant set
+  (carried in the finstate as `draw_base`). The scale simnet
+  (100 machines, 30% Byzantine, 48 rounds, two insertion orders)
+  passes with the fix and diverged without it; the 10-machine
+  finish-line battery is unaffected (target ≥ active there).
+- The launcher mitigation above (always bundle-start) is retired
+  with this deployment: plain starts resume from finstate again,
+  which is the path the kill/resume drill now exercises.
+
+## Operations log — 2026-11-14 (evening): redeploy and re-anchor
+
+- **Re-anchor (eighth).** The fix-batch binary (README corrections
+  13–19) was deployed from the epoch-209 bundle (sync round 3360,
+  sha256 c4e9b50f…), with t0 shifted to 1794646677 so round 3360
+  reopened at 17:45:57 +06. The bundle is published as
+  `testnet/bundle.bin` and, for the Railway node's re-sync, as
+  `testnet/bundle-anchor-2026-11-14.bin`.
+- **Two further findings fell out of the redeploy itself** (README
+  corrections 18–19; audit package findings 5–6): every synced
+  node observed the anchor round, which nobody had ever collected
+  — the chain held at the anchor until observed rounds learned to
+  contribute a late reveal; and a finstate-resumed node's serve
+  window stayed shut, so gossip lost in a mesh-formation race was
+  never re-served (owner races, loser holds) — serve windows now
+  extend toward any peer whose announced position trails, and
+  resumed nodes dwell on unfinalized past rounds like synced ones.
+- The local launcher no longer wipes on start: plain starts resume
+  from finstate (bundle as fallback), which is what the
+  kill/resume drill exercises from here on.
