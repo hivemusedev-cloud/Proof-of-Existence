@@ -56,19 +56,35 @@ was built per build step and lists every known deviation.
 6. `crates/poe-identity`, `poe-epoch`, `poe-wallet`, `poe-msg`,
    `poe-store`, `poe-compute`, `poe-v2`, `poe-mobile`, `poe-net`.
 
-## Open design question (needs the authors, not just an auditor)
+## Design questions
 
-**Liveness.** A round whose drawn committee loses a vote needed
-for its >2/3 quorum never finalizes: committees are drawn once,
-votes are one-time, finality is sequential, and the design has no
-re-draw, no timeout, no skip. Observed live four times on the
-testnet (rounds 752, 1084, 1231, 1528); recovery today is an
-operator re-anchor (finalized state is never lost; the
-unfinalized tail is discarded). A cure (the operator's
-recommendation is a next-committee skip attestation, specified in
-Lean before any Rust) is a design decision for the authors. Any
-audit should treat liveness as an open design item, not an
-implementation defect.
+**Liveness — mechanism adopted by the owner 2026-11-15,
+implemented testnet-profile.** A round whose drawn committee
+loses a vote needed for its >2/3 quorum never finalized:
+committees are drawn once, votes are one-time, finality is
+sequential, and the original design had no re-draw, no timeout,
+no skip. Observed live four times on the testnet (rounds 752,
+1084, 1231, 1528); recovery was an operator re-anchor. The
+adopted cure is the next-committee skip attestation: a vote for
+round r+1 may carry a signature witnessing round r empty, and at
+>2/3 of r+1's committee, r finalizes as a null round. It was
+specified and proved in Lean (`PoE_SkipAttestation.lean`,
+against the kernel's Part B finality: the two outcomes coexist
+only by naming >1/3 of validators in both supports) before the
+Rust landed. Auditors should audit the mechanism as implemented
+(README corrections 23–24), including the inert-late-attestation
+rule. Formal adoption for mainnet purposes remains the authors'
+decision; everything here is testnet profile.
+
+**Still open (authors' decision): the two-caps gap.** The
+Step 10 composition proof shows the Tokenomics envelope —
+including the first-year grant bound — composes only
+conditionally: machine closes hand the oracle cap (400,000,000
+on empty price history) where the envelope assumes the module
+cap (≤ 100,000). Closing it (hand `min (vcap) (kernelCap)` at
+closes, or prove an envelope for oracle-capped histories) is a
+design change, not an audit finding against the code as
+specified.
 
 ## Implementation findings to date (all in the node/finality layer)
 
@@ -130,12 +146,25 @@ the operator, fixed 2026-11-14 with regression tests:
    checkpoint instead of the fetched anchor. Fixed: the fetched
    bundle is installed as the node's checkpoint too.
 
-**Open (not fixed): DAG memory growth.** `poe-dag` keeps a full
-ancestor set per block — measured ~4.9 GB steady state for the
-33k-block epoch-209 state, growing quadratically. A bounded
-ancestor representation (gated by a replay-equivalence test
-against a recorded bundle) is owed before the testnet grows
-much further; see the README's open finding.
+9. **DAG memory growth (fixed 2026-11-15).** `poe-dag` kept a
+   full ancestor set per block — measured ~4.9 GB steady state
+   for the 33k-block epoch-209 state, growing quadratically.
+   Fixed with a bounded representation (exact window+frontier
+   ancestor oracle, blues/reds as a chosen-link rope, stored
+   reds dropped), gated by a differential battery against a
+   verbatim copy of the previous implementation and shaped
+   replay probes (419 MB peak at 11,991 blocks, testnet width,
+   vs the old quadratic curve). See README correction 22.
+   Replay *time* keeps the old asymptotics — an auditor should
+   treat from-scratch replay pace, not memory, as the remaining
+   scaling cost.
+10. **Late-attestation false conflicts (fixed 2026-11-15).**
+    The first skip-attestation build recorded every attestation
+    whenever it was counted, so the conflict query named honest
+    machines as double actors (attestations are cast against a
+    lagging local record). Fixed: an attestation counted after
+    its round finalized is inert — neither tallied nor recorded
+    (README correction 24).
 
 An auditor should re-derive each of these from the code and the
 issue history rather than trusting this summary, and should look

@@ -19,11 +19,38 @@
 //! blues lie in its anticone — otherwise it is red. The linearization is
 //! the recursive order: selected parent's order, then each mergeset
 //! block's order in consideration order, then the block itself.
+//!
+//! **Bounded memory (2026-11-15 redesign, DAG_MEMORY_DESIGN.md).** The
+//! original implementation stored, per block, its full ancestor set and
+//! its full blue/red lists — Θ(N²) memory (≈4.94 GB RSS at the 33k-block
+//! epoch-209 testnet state; one node per 8 GB host). This implementation
+//! stores per block only:
+//!   * a *window* of ancestors within `WINDOW_ROUNDS` rounds, plus a
+//!     *frontier* cut set (the deep ancestors that are parents of window
+//!     blocks) — together an EXACT ancestor oracle: `is_ancestor`
+//!     answers by window lookup or by descending frontier cuts, and is
+//!     provably identical to the full-set answer for any window size
+//!     (the window is a speed/memory constant, never an approximation);
+//!   * the GHOSTDAG *rope*: the candidates this block itself accepted
+//!     (blues) or rejected (reds). A block's full blues are
+//!     `blues(chosen) ++ [chosen] ++ accepted`, materialized on demand
+//!     by walking selected-parent links — O(1) retained per block.
+//! The Manual's own law licenses the shape: "the window is enough, a
+//! validator that forgets every closed window giving every input the
+//! verdict of one that forgot nothing." Equivalence with the original
+//! implementation is pinned by the differential battery in
+//! `tests/differential.rs` against a verbatim copy of it.
 
 use poe_crypto::hash::{h, Part, H512};
 use std::collections::{HashMap, HashSet};
 
 pub type BlockId = H512;
+
+/// Ancestor-window depth in rounds. Purely a speed/memory constant:
+/// ancestor queries deeper than the window are answered exactly by
+/// frontier descent (see `Anc`). Larger = faster deep queries, more
+/// retained ids per block.
+pub const WINDOW_ROUNDS: u64 = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
@@ -53,8 +80,9 @@ impl Block {
     }
 }
 
-/// GHOSTDAG data for one block, computed at insert time from its parents
-/// (all of which are already in the DAG, so this never changes afterwards).
+/// GHOSTDAG data for one block, materialized on demand from the stored
+/// rope (see `GhostCore`). Same shape the original implementation
+/// stored directly.
 #[derive(Clone, Debug)]
 pub struct GhostData {
     pub chosen: Option<BlockId>,
@@ -66,6 +94,36 @@ pub struct GhostData {
     pub blue_score: u64,
 }
 
+/// What is actually retained per block: the selected parent, the blue
+/// score, the mergeset in consideration order, and the two rope links —
+/// the candidates this block accepted into / rejected from the blues
+/// inherited from its selected parent. Full blues of a block are
+/// `blues(chosen) ++ [chosen] ++ accepted`; full reds are
+/// `reds(chosen) ++ rejected`.
+#[derive(Clone, Debug)]
+struct GhostCore {
+    chosen: Option<BlockId>,
+    mergeset_order: Vec<BlockId>,
+    accepted: Vec<BlockId>,
+    rejected: Vec<BlockId>,
+    blue_score: u64,
+}
+
+/// Exact ancestor oracle data for one block.
+/// `window`: the block itself plus every ancestor with
+/// `round >= round(block) - WINDOW_ROUNDS`, sorted.
+/// `frontier`: every ancestor with `round < round(block) - WINDOW_ROUNDS`
+/// that is a parent of a window block (or of the block itself), sorted —
+/// the cut through which all deeper ancestors are reached.
+/// Invariant (proved in DAG_MEMORY_DESIGN.md §4): every ancestor `a` of
+/// the block is either in `window` (when `round(a)` is at/above the
+/// cutoff), or in `frontier`, or an ancestor of a `frontier` member.
+#[derive(Clone, Debug)]
+struct Anc {
+    window: Vec<BlockId>,
+    frontier: Vec<BlockId>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum DagError {
     UnknownParent,
@@ -75,8 +133,8 @@ pub enum DagError {
 
 pub struct Dag {
     blocks: HashMap<BlockId, Block>,
-    ghost: HashMap<BlockId, GhostData>,
-    ancestors: HashMap<BlockId, HashSet<BlockId>>,
+    ghost: HashMap<BlockId, GhostCore>,
+    anc: HashMap<BlockId, Anc>,
     children: HashMap<BlockId, Vec<BlockId>>,
     genesis: Option<BlockId>,
     /// The GHOSTDAG cluster parameter: how many blue blocks may sit in a
@@ -89,7 +147,7 @@ impl Dag {
         Dag {
             blocks: HashMap::new(),
             ghost: HashMap::new(),
-            ancestors: HashMap::new(),
+            anc: HashMap::new(),
             children: HashMap::new(),
             genesis: None,
             k,
@@ -100,16 +158,94 @@ impl Dag {
         self.blocks.get(id)
     }
 
-    pub fn ghost(&self, id: &BlockId) -> Option<&GhostData> {
-        self.ghost.get(id)
+    fn cutoff(round: u64) -> u64 {
+        round.saturating_sub(WINDOW_ROUNDS)
+    }
+
+    fn round_of(&self, id: &BlockId) -> Option<u64> {
+        self.blocks.get(id).map(|b| b.round)
+    }
+
+    /// Materialize a block's full blue list by walking selected-parent
+    /// links: `blues(b) = blues(chosen) ++ [chosen] ++ accepted(b)`.
+    fn blues_of(&self, id: &BlockId) -> Vec<BlockId> {
+        // Collect the selected-parent chain down to genesis, then unwind.
+        let mut chain: Vec<&GhostCore> = Vec::new();
+        let mut cur = *id;
+        loop {
+            let g = &self.ghost[&cur];
+            chain.push(g);
+            match g.chosen {
+                Some(c) => cur = c,
+                None => break,
+            }
+        }
+        let mut out: Vec<BlockId> = Vec::new();
+        // Unwind from genesis upward: each level contributes its chosen
+        // (which is the next level down's block) then its accepted.
+        for (i, g) in chain.iter().enumerate().rev() {
+            if i + 1 < chain.len() {
+                // The block whose core sits one level deeper is this
+                // level's chosen.
+                let chosen_id = g.chosen.expect("non-genesis level has a chosen");
+                out.push(chosen_id);
+            }
+            out.extend(g.accepted.iter().copied());
+        }
+        out
+    }
+
+    /// Materialize a block's full red list, the mirror of `blues_of`.
+    fn reds_of(&self, id: &BlockId) -> Vec<BlockId> {
+        let mut chain: Vec<&GhostCore> = Vec::new();
+        let mut cur = *id;
+        loop {
+            let g = &self.ghost[&cur];
+            chain.push(g);
+            match g.chosen {
+                Some(c) => cur = c,
+                None => break,
+            }
+        }
+        let mut out: Vec<BlockId> = Vec::new();
+        for g in chain.iter().rev() {
+            out.extend(g.rejected.iter().copied());
+        }
+        out
+    }
+
+    pub fn ghost(&self, id: &BlockId) -> Option<GhostData> {
+        let g = self.ghost.get(id)?;
+        Some(GhostData {
+            chosen: g.chosen,
+            blues: self.blues_of(id),
+            reds: self.reds_of(id),
+            mergeset_order: g.mergeset_order.clone(),
+            blue_score: g.blue_score,
+        })
     }
 
     pub fn blue_score(&self, id: &BlockId) -> u64 {
         self.ghost.get(id).map(|g| g.blue_score).unwrap_or(0)
     }
 
+    /// Exact ancestor test — identical answers to the original full-set
+    /// implementation (pinned by the differential battery).
     pub fn is_ancestor(&self, anc: &BlockId, of: &BlockId) -> bool {
-        self.ancestors.get(of).map(|s| s.contains(anc)).unwrap_or(false)
+        let (Some(ra), Some(ro)) = (self.round_of(anc), self.round_of(of)) else {
+            return false;
+        };
+        if ra > ro {
+            return false;
+        }
+        let a = &self.anc[of];
+        if ra >= Self::cutoff(ro) {
+            return a.window.binary_search(anc).is_ok();
+        }
+        if a.frontier.binary_search(anc).is_ok() {
+            return true;
+        }
+        a.frontier.iter().any(|f| self.is_ancestor(anc, f))
     }
 
     /// Current tips (blocks with no children), in deterministic order.
@@ -136,6 +272,28 @@ impl Dag {
             })
     }
 
+    /// The mergeset of a new block: every block in a non-chosen parent's
+    /// past that is not in the chosen parent's past (pasts include the
+    /// parents themselves). Computed by DFS from the non-chosen parents,
+    /// pruned wherever a block is in the chosen past (its ancestors are
+    /// too, by transitivity) — visits each mergeset block once.
+    fn mergeset_of(&self, chosen: &BlockId, others: &[BlockId]) -> HashSet<BlockId> {
+        let mut out: HashSet<BlockId> = HashSet::new();
+        let mut seen: HashSet<BlockId> = HashSet::new();
+        let mut stack: Vec<BlockId> = others.to_vec();
+        while let Some(x) = stack.pop() {
+            if !seen.insert(x) {
+                continue;
+            }
+            if self.is_ancestor(&x, chosen) {
+                continue; // in the chosen past: prune the whole subtree
+            }
+            out.insert(x);
+            stack.extend(self.blocks[&x].parents.iter().copied());
+        }
+        out
+    }
+
     pub fn insert(&mut self, block: Block) -> Result<(), DagError> {
         if self.blocks.contains_key(&block.id) {
             return Err(DagError::Duplicate);
@@ -151,15 +309,50 @@ impl Dag {
                 return Err(DagError::UnknownParent);
             }
         }
-        // Ancestor set: the block itself plus every parent's ancestors.
-        let mut anc: HashSet<BlockId> = HashSet::new();
-        anc.insert(block.id);
-        for p in &block.parents {
-            anc.extend(self.ancestors[p].iter().copied());
-        }
+
+        // Ancestor oracle data: retained = {block} ∪ ⋃ parents'
+        // (window ∪ frontier); window keeps the part at/above this
+        // block's cutoff, and the frontier is the deep part's boundary —
+        // deep retained blocks that are parents of window blocks.
+        let anc = {
+            let mut retained: HashSet<BlockId> = HashSet::new();
+            retained.insert(block.id);
+            for p in &block.parents {
+                let pa = &self.anc[p];
+                retained.extend(pa.window.iter().copied());
+                retained.extend(pa.frontier.iter().copied());
+            }
+            let cut = Self::cutoff(block.round);
+            let mut window: Vec<BlockId> = retained
+                .iter()
+                .copied()
+                .filter(|x| self.blocks.get(x).map(|b| b.round).unwrap_or(block.round) >= cut)
+                .collect();
+            window.sort();
+            window.dedup();
+            let winset: HashSet<BlockId> = window.iter().copied().collect();
+            let mut frontier: Vec<BlockId> = Vec::new();
+            for y in &window {
+                // Parents of every window block; the new block itself is
+                // not in `blocks` yet, so its parents come from `block`.
+                let parents: &[BlockId] = if *y == block.id {
+                    &block.parents
+                } else {
+                    &self.blocks[y].parents
+                };
+                for par in parents {
+                    if !winset.contains(par) {
+                        frontier.push(*par);
+                    }
+                }
+            }
+            frontier.sort();
+            frontier.dedup();
+            Anc { window, frontier }
+        };
 
         let ghost = if block.parents.is_empty() {
-            GhostData { chosen: None, blues: vec![], reds: vec![], mergeset_order: vec![], blue_score: 0 }
+            GhostCore { chosen: None, mergeset_order: vec![], accepted: vec![], rejected: vec![], blue_score: 0 }
         } else {
             // Selected parent: greatest blue score, tie -> smallest id.
             let chosen = *block
@@ -171,17 +364,10 @@ impl Dag {
                         .then(b.cmp(a))
                 })
                 .expect("non-empty parents");
-            let chosen_ghost = self.ghost[&chosen].clone();
             // Mergeset: every other parent's past, minus the chosen past.
-            let mut mergeset: HashSet<BlockId> = HashSet::new();
-            for p in &block.parents {
-                if *p != chosen {
-                    mergeset.extend(self.ancestors[p].iter().copied());
-                }
-            }
-            for a in &self.ancestors[&chosen] {
-                mergeset.remove(a);
-            }
+            let others: Vec<BlockId> =
+                block.parents.iter().copied().filter(|p| *p != chosen).collect();
+            let mergeset = self.mergeset_of(&chosen, &others);
             // Consider in decreasing blue-score order, ties by id.
             let mut order: Vec<BlockId> = mergeset.into_iter().collect();
             order.sort_by(|a, b| {
@@ -189,30 +375,33 @@ impl Dag {
                     .cmp(&self.blue_score(a))
                     .then(a.cmp(b))
             });
-            let mut blues: Vec<BlockId> = chosen_ghost.blues.clone();
+            // The growing blues list: chosen's blues, then chosen, then
+            // each accepted candidate in consideration order.
+            let mut blues: Vec<BlockId> = self.blues_of(&chosen);
             blues.push(chosen);
-            let mut reds: Vec<BlockId> = chosen_ghost.reds.clone();
+            let mut accepted: Vec<BlockId> = Vec::new();
+            let mut rejected: Vec<BlockId> = Vec::new();
             for cand in &order {
-                let cand_anc = &self.ancestors[cand];
                 let in_anticone = blues
                     .iter()
-                    .filter(|&y| !cand_anc.contains(y) && !self.ancestors[y].contains(cand))
+                    .filter(|&y| !self.is_ancestor(y, cand) && !self.is_ancestor(cand, y))
                     .count() as u64;
                 if in_anticone <= self.k {
                     blues.push(*cand);
+                    accepted.push(*cand);
                 } else {
-                    reds.push(*cand);
+                    rejected.push(*cand);
                 }
             }
             let blue_score = blues.len() as u64;
-            GhostData { chosen: Some(chosen), blues, reds, mergeset_order: order, blue_score }
+            GhostCore { chosen: Some(chosen), mergeset_order: order, accepted, rejected, blue_score }
         };
 
         for p in &block.parents {
             self.children.entry(*p).or_default().push(block.id);
         }
         self.children.entry(block.id).or_default();
-        self.ancestors.insert(block.id, anc);
+        self.anc.insert(block.id, anc);
         self.ghost.insert(block.id, ghost);
         self.blocks.insert(block.id, block);
         Ok(())
@@ -380,9 +569,9 @@ mod tests {
         }
     }
 
-    /// The pre-fix recursive append_order, kept as the reference the
-    /// iterative walk must match EXACTLY (same emission order) on
-    /// every DAG shape.
+    /// The pre-redesign recursive append_order, kept as the reference
+    /// the iterative walk must match EXACTLY (same emission order) on
+    /// every DAG shape. Reads the stored rope cores directly.
     fn reference_append(d: &Dag, b: BlockId, out: &mut Vec<BlockId>, seen: &mut HashSet<BlockId>) {
         if seen.contains(&b) {
             return;
@@ -486,6 +675,79 @@ mod tests {
             })
             .unwrap();
         handle.join().unwrap();
+    }
+
+    /// The ancestor oracle must stay exact far beyond the window:
+    /// on a long chain every earlier block is an ancestor of every
+    /// later one, and retained window/frontier sizes stay bounded.
+    #[test]
+    fn ancestor_oracle_exact_beyond_the_window() {
+        let mut d = Dag::new(3);
+        let g = blk(1, 0, vec![], 0);
+        let mut prev = g.id;
+        let mut ids = vec![g.id];
+        d.insert(g).unwrap();
+        for r in 1..600u64 {
+            let b = blk(1, r, vec![prev], (r % 251) as u8);
+            prev = b.id;
+            ids.push(b.id);
+            d.insert(b).unwrap();
+        }
+        let tip = *ids.last().unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            assert!(d.is_ancestor(id, &tip), "chain block {i} must be an ancestor of the tip");
+            let a = &d.anc[id];
+            assert!(
+                a.window.len() <= (WINDOW_ROUNDS as usize) + 1,
+                "window must stay bounded, got {} at round {i}",
+                a.window.len()
+            );
+            assert!(a.frontier.len() <= 1, "chain frontier is a single cut block, got {}", a.frontier.len());
+        }
+        // Non-ancestry across the chain: nothing is an ancestor of genesis.
+        for id in &ids[1..] {
+            assert!(!d.is_ancestor(id, &ids[0]));
+        }
+    }
+
+    /// Retained oracle data stays bounded on a wide mesh too: window is
+    /// at most WINDOW_ROUNDS rounds of width, frontier at most a band
+    /// of boundary parents.
+    #[test]
+    fn oracle_data_bounded_on_a_wide_mesh() {
+        let width = 6u64;
+        let rounds = 300u64;
+        let mut d = Dag::new(3);
+        let g = blk(1, 0, vec![], 0);
+        let gid = g.id;
+        d.insert(g).unwrap();
+        let mut prev_round: Vec<BlockId> = vec![gid];
+        for r in 1..rounds {
+            let mut this_round = Vec::new();
+            for m in 0..width {
+                // Each block takes two parents from the previous round.
+                let p1 = prev_round[(m as usize) % prev_round.len()];
+                let p2 = prev_round[((m as usize) + 1) % prev_round.len()];
+                let mut parents = vec![p1];
+                if p2 != p1 {
+                    parents.push(p2);
+                }
+                let b = blk(m + 1, r, parents, (r % 251) as u8);
+                this_round.push(b.id);
+                d.insert(b).unwrap();
+            }
+            prev_round = this_round;
+        }
+        let max_window = (WINDOW_ROUNDS as usize + 1) * (width as usize);
+        for (id, a) in &d.anc {
+            assert!(a.window.len() <= max_window, "window {} exceeds bound at {:?}", a.window.len(), id);
+            assert!(
+                a.frontier.len() <= 2 * (width as usize),
+                "frontier {} exceeds bound at {:?}",
+                a.frontier.len(),
+                id
+            );
+        }
     }
 }
 

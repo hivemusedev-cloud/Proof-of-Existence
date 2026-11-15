@@ -121,13 +121,13 @@ fn run_sim(reverse_insertion: bool) -> Finality {
             }
             if id < FIRST_DOUBLE_PROPOSER {
                 let sig = machines.get_mut(&id).unwrap().xmss.sign(&target).unwrap();
-                pending.push((round + 2, Vote { machine: id, round, block: target, sig }));
+                pending.push((round + 2, Vote { machine: id, round, block: target, sig, skip: None }));
             } else if id >= FIRST_EQUIVOCATOR {
                 let other = *order.iter().rev().find(|x| of_round(x) && **x != target).unwrap();
                 let s1 = machines.get_mut(&id).unwrap().xmss.sign(&target).unwrap();
-                pending.push((round + 2, Vote { machine: id, round, block: target, sig: s1 }));
+                pending.push((round + 2, Vote { machine: id, round, block: target, sig: s1, skip: None }));
                 let s2 = machines.get_mut(&id).unwrap().xmss.sign(&other).unwrap();
-                pending.push((round + 2, Vote { machine: id, round, block: other, sig: s2 }));
+                pending.push((round + 2, Vote { machine: id, round, block: other, sig: s2, skip: None }));
             }
             // Double-proposers in the committee abstain (as at the
             // finish line): their misbehavior is the second proposal.

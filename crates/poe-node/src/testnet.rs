@@ -514,10 +514,11 @@ pub fn read_bundle(path: &Path) -> io::Result<Bundle> {
 // vote store (and can be re-cast; see run_testnet).
 
 // POEFIN2: adds the per-round frozen draw denominators (draw_base).
-// A POEFIN1 file is refused by the magic check and the node falls
-// back to a bundle/store resume — never a hard failure (see the
-// resume selection in run_testnet).
-const FINSTATE_MAGIC: &[u8; 8] = b"POEFIN2\0";
+// POEFIN3: adds the skip-attestation tallies (skip_votes).
+// A file with an older magic is refused by the magic check and the
+// node falls back to a bundle/store resume — never a hard failure
+// (see the resume selection in run_testnet).
+const FINSTATE_MAGIC: &[u8; 8] = b"POEFIN3\0";
 
 /// The set of rounds a starting node must never vote in.
 ///
@@ -668,6 +669,14 @@ fn write_finstate(path: &Path, fin: &Finality, next_apply: u64) -> io::Result<()
             w_u64(&mut out, *m);
             w_u64(&mut out, *e);
             w_u64(&mut out, *n);
+        }
+    }
+    w_u32(&mut out, snap.skip_votes.len() as u32);
+    for (r, vs) in &snap.skip_votes {
+        w_u64(&mut out, *r);
+        w_u32(&mut out, vs.len() as u32);
+        for m in vs {
+            w_u64(&mut out, *m);
         }
     }
     let tmp = path.with_extension("tmp");
@@ -824,6 +833,17 @@ fn read_finstate(path: &Path) -> io::Result<(Finality, u64)> {
         }
         counters_all.push(entries);
     }
+    let nsk = c.u32()?;
+    let mut skip_votes = Vec::new();
+    for _ in 0..nsk {
+        let r = c.u64()?;
+        let n = c.u32()?;
+        let mut vs = Vec::new();
+        for _ in 0..n {
+            vs.push(c.u64()?);
+        }
+        skip_votes.push((r, vs));
+    }
     let mut canons = canons.into_iter();
     let mut all_regs = all_regs.into_iter();
     let mut counters_all = counters_all.into_iter();
@@ -843,6 +863,7 @@ fn read_finstate(path: &Path) -> io::Result<(Finality, u64)> {
         reveals,
         vote_store,
         voters,
+        skip_votes,
         canonical_prop: canons.next().unwrap_or_default(),
         canonical_vote: canons.next().unwrap_or_default(),
         prop_registries: all_regs.next().unwrap_or_default(),
@@ -1094,6 +1115,13 @@ impl Node {
 
     fn apply_finalized(&mut self) -> io::Result<()> {
         while let Some(bid) = self.fin.finalized.get(&self.next_apply).copied() {
+            // A null round (skip attestation, 2026-11-15): the round
+            // closed empty — nothing to apply, the sequence advances.
+            if bid == poe_finality::NULL_BLOCK {
+                println!("NULL round={} closed empty by skip attestation", self.next_apply);
+                self.next_apply += 1;
+                continue;
+            }
             // A finalized block not yet in the local DAG is a wait,
             // not a death: it can still arrive (or be re-served), and
             // the next round retries. Killing the node here turned a
@@ -1439,7 +1467,16 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         for (round, block) in mine {
             if round >= node.next_apply && !node.fin.finalized.contains_key(&round) {
                 if let Ok(sig) = node.keys.xmss.sign_persistent(&node.keys.xmss_path, &block) {
-                    let vote = Vote { machine, round, block, sig };
+                    // Re-cast carries the attestation too, under the
+                    // same rule as a fresh cast: the attested round is
+                    // still unfinalized in this node's record.
+                    let skip = if round >= 1 && !node.fin.finalized.contains_key(&(round - 1)) {
+                        let msg = poe_finality::skip_message(round - 1);
+                        node.keys.xmss.sign_persistent(&node.keys.xmss_path, &msg).ok()
+                    } else {
+                        None
+                    };
+                    let vote = Vote { machine, round, block, sig, skip };
                     let _ = node.fin.vote(vote.clone());
                     let _ = node
                         .net
@@ -2113,8 +2150,30 @@ impl Node {
                         if let Ok(sig) =
                             self.keys.xmss.sign_persistent(&self.keys.xmss_path, target)
                         {
-                            let vote =
-                                Vote { machine: self.keys.machine, round: target_round, block: *target, sig };
+                            // Skip attestation (2026-11-15): if the
+                            // round before the one I am voting on is
+                            // still unfinalized in my record, my vote
+                            // witnesses that it closed empty — the
+                            // next seat attesting, per the Lean
+                            // extension (PoE_SkipAttestation).
+                            let skip = if target_round >= 1
+                                && !self.fin.finalized.contains_key(&(target_round - 1))
+                            {
+                                let msg = poe_finality::skip_message(target_round - 1);
+                                self.keys
+                                    .xmss
+                                    .sign_persistent(&self.keys.xmss_path, &msg)
+                                    .ok()
+                            } else {
+                                None
+                            };
+                            let vote = Vote {
+                                machine: self.keys.machine,
+                                round: target_round,
+                                block: *target,
+                                sig,
+                                skip,
+                            };
                             let body = encode_vote(&vote);
                             let _ = self.net.publish(TOPIC_VOTES, framed(3, round, &body));
                             let _ = self.fin.vote(vote);

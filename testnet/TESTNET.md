@@ -364,3 +364,51 @@ operations.
   VM therefore runs ONE local node now (node1; node2/3 stopped) —
   the three-node local mesh is retired until the ancestor
   representation is bounded. See the README's open finding.
+
+## Operations log — 2026-11-15: liveness mechanism and bounded DAG land
+
+- **Skip attestation implemented** (owner-adopted design,
+  README corrections 23–24): a vote for round r+1 may carry an
+  XMSS signature over `skip_message(r)`; at >2/3 of r+1's
+  committee the stalled round finalizes as a null round
+  (`NULL_BLOCK`). Block finality is never overridden; late
+  attestations are inert. Specified and proved in the Lean
+  extension first (`PoE_SkipAttestation.lean`). Finstate format
+  is now `POEFIN3`; nodes resuming from `POEFIN2` files degrade
+  to the bundle resume as designed. Battery: `simnet_skip` 3/3
+  (stall witnessed and closed null; precedence; the conflict
+  detector names exactly a live double actor).
+- **Bounded DAG representation implemented** (README correction
+  22): the ancestor representation behind the 2026-11-14 memory
+  ceiling is replaced — exact window+frontier oracle, blues/reds
+  as a rope, stored reds dropped. Differential battery against
+  the previous implementation passes; shaped replay peaks at
+  419 MB for 11,991 blocks at testnet width (old curve:
+  quadratic, 1,696 MB already at 3,595 blocks). node1's steady
+  RSS on the new binary is to be measured live; the one-node-per
+  host limit is expected to lift but is not claimed until
+  observed.
+- **node1 restarted on the new binary (2026-11-15 ~12:40 +06),
+  observed:** its `POEFIN2` finstate was refused by the new
+  `POEFIN3` binary and it fell back to the epoch bundle, exactly
+  as designed — `START synced from bundle at epoch 209 (round
+  3360); ledger epoch 210 minted 300000000399999`. That first
+  start took the bundle resume's wall-clock frontier posture
+  (observing, closing nothing alone). The node persisted a
+  `POEFIN3` finstate, and from the next restart it is a full
+  finstate resume: sequentially processing from round 3361 and
+  HOLDing it in the catch-up dwell — `HOLD round 3361: no peer
+  material` — the same posture as before the redeploy, waiting
+  for a canonical peer. **Steady RSS ~72–74 MB at the epoch-209
+  state, against ~4.9 GB on the old binary** — the bounded DAG
+  representation verified live at the very state that set the
+  ceiling. The canonical head remains the epoch-209 anchor
+  until a peer network exists again (Railway is on the fork
+  lineage — see the flip note below; nodes 2/3 are stopped).
+- **Epoch compaction is NOT in this build**: specified, with an
+  exactness analysis showing the naive form can diverge on
+  long-lived forks; the safe form is a separate gated step.
+- **Railway is still on the fork lineage** (see the 2026-11-14
+  evening entry): the POE_BUNDLE_URL flip back to
+  `testnet/bundle.bin` remains outstanding at the time of
+  writing.

@@ -60,15 +60,41 @@ pub struct MachineInfo {
     pub dsa_public_key: Vec<u8>,
 }
 
+/// The null block: the finalized "block" of a round that closed empty
+/// under skip attestation (the Lean extension's side 0,
+/// PoE_SkipAttestation.lean). Never a DAG block; as a beacon reference
+/// or heartbeat tip it reads as zero, like an absent one.
+pub const NULL_BLOCK: BlockId = [0u8; 64];
+
+/// The message a skip attestation signs for `round`: a domain-separated
+/// hash of the attested round, so an attestation can never be replayed
+/// as a vote or carried to another round.
+pub fn skip_message(round: u64) -> H512 {
+    h("skip", &[Part::Nat(round)])
+}
+
 /// One committee vote: an XMSS one-time signature over a block id, plus
 /// the ticket link that seated the voter (already revealed in the round's
 /// reveal phase, carried here for stateless verifiers).
+///
+/// `skip` (2026-11-15, the liveness extension): when the previous round
+/// is still unfinalized in the voter's record, its vote for THIS round
+/// may carry a second one-time signature, over `skip_message(round - 1)`
+/// — the next seat witnessing that the previous round closed empty.
+/// Attestations are counted from canonical (accepted) votes only; when
+/// more than two thirds of THIS round's committee have attested, the
+/// previous round finalizes as a null round ([`NULL_BLOCK`]), unless it
+/// already finalized with a block. Spec: PoE_SkipAttestation.lean —
+/// if both outcomes ever reach quorum on one merged record, more than
+/// a third of the validators stand in both supports, by evidence
+/// (see [`Finality::skip_conflicts`]).
 #[derive(Clone)]
 pub struct Vote {
     pub machine: u64,
     pub round: u64,
     pub block: BlockId,
     pub sig: XmssSignature,
+    pub skip: Option<XmssSignature>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -109,6 +135,9 @@ pub struct Finality {
     canonical_prop: HashMap<(u64, u64), BlockId>,
     canonical_vote: HashMap<(u64, u64), BlockId>,
     voters: HashMap<(u64, BlockId), HashSet<u64>>,
+    /// Skip attestations counted so far, by attested round: the set of
+    /// next-round committee members whose canonical votes carried one.
+    skip_votes: HashMap<u64, HashSet<u64>>,
     /// Accepted votes, retained so a node can re-serve them: a peer
     /// that synced from an epoch-boundary bundle still needs the
     /// current epoch's votes to finalize the rounds since the bundle,
@@ -138,6 +167,7 @@ impl Finality {
             canonical_prop: HashMap::new(),
             canonical_vote: HashMap::new(),
             voters: HashMap::new(),
+            skip_votes: HashMap::new(),
             vote_store: HashMap::new(),
             used_leaves: HashMap::new(),
             finalized: HashMap::new(),
@@ -303,7 +333,39 @@ impl Finality {
         self.reveals.retain(|(r, _), _| *r >= round);
         self.draw_base.retain(|r, _| *r >= round);
         self.voters.retain(|(r, _), _| *r >= round);
+        self.skip_votes.retain(|r, _| *r >= round);
         self.vote_store.retain(|(_, r), _| *r >= round);
+    }
+
+    /// Diagnostic: skip attestations counted for `round`, and the size
+    /// of the attesting (next round's) committee, if it has closed.
+    pub fn skip_tally(&self, round: u64) -> (u64, u64) {
+        let n = self.skip_votes.get(&round).map(|s| s.len() as u64).unwrap_or(0);
+        let size = self.committees.get(&(round + 1)).map(|c| c.len() as u64).unwrap_or(0);
+        (n, size)
+    }
+
+    /// The double actors the Lean extension names: machines that voted
+    /// for the block a round finalized with AND attested that the same
+    /// round closed empty. On any single honest record this is empty
+    /// (an attestation is only counted toward a round that had not
+    /// finalized); on a merged record showing both outcomes, these are
+    /// the accountable parties, returned as (machine, round, block).
+    pub fn skip_conflicts(&self) -> Vec<(u64, u64, BlockId)> {
+        let mut out = Vec::new();
+        for (round, attestors) in &self.skip_votes {
+            if let Some(winner) = self.finalized.get(round) {
+                if *winner != NULL_BLOCK {
+                    for m in attestors {
+                        if self.canonical_vote.get(&(*m, *round)) == Some(winner) {
+                            out.push((*m, *round, *winner));
+                        }
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
     }
 
     /// Diagnostic: the votes counted so far for `round`, as
@@ -409,8 +471,25 @@ impl Finality {
         if !xmss::verify(&info.xmss_root, info.xmss_height, &vote.block, &vote.sig) {
             return Err(FinError::BadSignature);
         }
+        // A carried skip attestation is part of the same signed object:
+        // it is verified (and its leaf burned) or the vote is refused
+        // whole — a forged attestation never rides a valid vote.
+        if let Some(ssig) = &vote.skip {
+            if vote.round == 0 {
+                return Err(FinError::BadSignature);
+            }
+            if !xmss::verify(&info.xmss_root, info.xmss_height, &skip_message(vote.round - 1), ssig) {
+                return Err(FinError::BadSignature);
+            }
+            if self.used_leaves.get(&machine).map(|s| s.contains(&ssig.leaf)).unwrap_or(false) {
+                return Err(FinError::LeafReuse);
+            }
+        }
         if !self.used_leaves.entry(machine).or_default().insert(vote.sig.leaf) {
             return Err(FinError::LeafReuse);
+        }
+        if let Some(ssig) = &vote.skip {
+            self.used_leaves.entry(machine).or_default().insert(ssig.leaf);
         }
         let outcome = self
             .vote_regs
@@ -426,6 +505,31 @@ impl Finality {
                 let count = self.voters[&(vote.round, vote.block)].len() as u64;
                 if count * 3 > 2 * committee_size && !self.finalized.contains_key(&vote.round) {
                     self.finalized.insert(vote.round, vote.block);
+                }
+                // Skip attestation: this canonical vote witnesses that
+                // the previous round closed empty. At more than two
+                // thirds of THIS round's committee, the previous round
+                // finalizes as a null round — unless it already
+                // finalized with a block (block finality, once
+                // reached, is never overridden; the Lean extension's
+                // precedence rule). An attestation counted only after
+                // its round already finalized is INERT, exactly like a
+                // late vote: it is neither tallied nor recorded, so
+                // `skip_votes` holds only attestations that were live
+                // when counted — which is what makes `skip_conflicts`
+                // an honest evidence aid (an attestation cast against
+                // a lagging local record whose round had in fact
+                // already closed with a block names nobody).
+                if vote.skip.is_some() && vote.round >= 1 {
+                    let attested = vote.round - 1;
+                    if !self.finalized.contains_key(&attested) {
+                        let set = self.skip_votes.entry(attested).or_default();
+                        set.insert(machine);
+                        let scount = set.len() as u64;
+                        if scount * 3 > 2 * committee_size {
+                            self.finalized.insert(attested, NULL_BLOCK);
+                        }
+                    }
                 }
             }
             ClaimOutcome::Evidence => {
@@ -515,7 +619,10 @@ impl<'a> Reader<'a> {
 }
 
 /// Canonical vote encoding: machine, round, block id, then the XMSS
-/// signature (leaf, WOTS+ chain values, authentication path).
+/// signature (leaf, WOTS+ chain values, authentication path). A carried
+/// skip attestation follows as a trailing section — a presence byte
+/// and, if present, the attestation's signature in the same shape;
+/// encodings without it (pre-extension votes) decode with `skip: None`.
 pub fn encode_vote(v: &Vote) -> Vec<u8> {
     let mut out = Vec::new();
     put_u64(&mut out, v.machine);
@@ -524,6 +631,15 @@ pub fn encode_vote(v: &Vote) -> Vec<u8> {
     put_u64(&mut out, v.sig.leaf);
     put_bytes32s(&mut out, &v.sig.wots);
     put_bytes32s(&mut out, &v.sig.auth);
+    match &v.skip {
+        Some(ssig) => {
+            out.push(1);
+            put_u64(&mut out, ssig.leaf);
+            put_bytes32s(&mut out, &ssig.wots);
+            put_bytes32s(&mut out, &ssig.auth);
+        }
+        None => out.push(0),
+    }
     out
 }
 
@@ -535,7 +651,18 @@ pub fn decode_vote(raw: &[u8]) -> Option<Vote> {
     let leaf = r.u64()?;
     let wots = r.bytes32s()?;
     let auth = r.bytes32s()?;
-    Some(Vote { machine, round, block, sig: XmssSignature { leaf, wots, auth } })
+    // Trailing skip section added by the liveness extension; absent
+    // (an encoding that ends at the vote signature) means no attestation.
+    let skip = match r.take(1) {
+        Some([1]) => {
+            let sleaf = r.u64()?;
+            let swots = r.bytes32s()?;
+            let sauth = r.bytes32s()?;
+            Some(XmssSignature { leaf: sleaf, wots: swots, auth: sauth })
+        }
+        _ => None,
+    };
+    Some(Vote { machine, round, block, sig: XmssSignature { leaf, wots, auth }, skip })
 }
 
 /// Canonical machine-announcement encoding: everything a peer needs to
@@ -647,6 +774,7 @@ pub struct FullSnapshot {
     pub reveals: Vec<(u64, u64, H512)>,
     pub vote_store: Vec<(u64, u64, Vote)>,
     pub voters: Vec<(u64, BlockId, Vec<u64>)>,
+    pub skip_votes: Vec<(u64, Vec<u64>)>,
     pub canonical_prop: Vec<(u64, u64, BlockId)>,
     pub canonical_vote: Vec<(u64, u64, BlockId)>,
     pub prop_registries: Vec<(u64, Vec<u64>, Vec<Spend>, Vec<(Spend, Spend)>)>,
@@ -769,6 +897,12 @@ impl Finality {
                 .filter(|((r, _), _)| *r >= floor)
                 .map(|((r, b), s)| (*r, *b, s.iter().copied().collect()))
                 .collect(),
+            skip_votes: self
+                .skip_votes
+                .iter()
+                .filter(|(r, _)| **r >= floor)
+                .map(|(r, s)| (*r, s.iter().copied().collect()))
+                .collect(),
             canonical_prop: self
                 .canonical_prop
                 .iter()
@@ -815,6 +949,9 @@ impl Finality {
         for (r, b, s) in snap.voters {
             fin.voters.insert((r, b), s.into_iter().collect());
         }
+        for (r, s) in snap.skip_votes {
+            fin.skip_votes.insert(r, s.into_iter().collect());
+        }
         for (m, r, b) in snap.canonical_prop {
             fin.canonical_prop.insert((m, r), b);
         }
@@ -843,6 +980,11 @@ impl Finality {
     /// evidence against itself.
     pub fn canonical_prop_of(&self, machine: u64, round: u64) -> Option<BlockId> {
         self.canonical_prop.get(&(machine, round)).copied()
+    }
+
+    /// The block this machine canonically voted for in `round`, if any.
+    pub fn canonical_vote_of(&self, machine: u64, round: u64) -> Option<BlockId> {
+        self.canonical_vote.get(&(machine, round)).copied()
     }
 
     /// The blocks this machine has canonically voted for, by round —

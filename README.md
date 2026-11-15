@@ -307,17 +307,22 @@ kernel or money rules:
     and history was re-served as the whole retained range every
     round — it is now walked in slices.
 
-**The open finding — liveness under churn.** Even with all of the
-above, a round whose drawn committee loses a vote (a voter
-crashes, lags an epoch, or votes a different block after late
-delivery) can sit one vote short of finality forever: committees
-are drawn once, votes are one-time claims, and finality is
-sequential. The chain stalled this way at rounds 752, 1084 and
-1231. Recovery today is an operator re-anchor from the last epoch
-bundle — final state is never lost, the unfinalized tail is
-discarded. Whether the protocol itself gains a liveness mechanism
-is a design decision for its authors, not a patch; the full
-account is in `testnet/TESTNET.md` (operations log).
+**Liveness under churn — mechanism adopted and implemented
+(2026-11-15, correction 23).** The finding stood as follows: a
+round whose drawn committee loses a vote (a voter crashes, lags
+an epoch, or votes a different block after late delivery) could
+sit one vote short of finality forever: committees are drawn
+once, votes are one-time claims, and finality is sequential.
+The chain stalled this way at rounds 752, 1084, 1231 and 1528,
+and recovery was an operator re-anchor from the last epoch
+bundle. The owner adopted the skip-attestation design on
+2026-11-15 — the next round's committee witnesses the empty
+round, and at >2/3 attestation it finalizes as a null round —
+specified and proved in the Lean extension before the Rust
+landed (corrections 23–24). The operator re-anchor remains the
+fallback for stalls the attestation cannot witness (e.g. the
+attesting round itself never forms). The full account is in
+`testnet/TESTNET.md` (operations log).
 
 Acceptance evidence: genesis of 2026-11-13 21:14 +06 — three nodes
 over real libp2p finalized in lockstep with identical closes
@@ -430,22 +435,77 @@ kernel and money rules are again untouched:
     the stale checkpoint — a *fork* bundle (epoch 162) — instead
     of the anchor it had just fetched (epoch 209). The fetched
     bundle is now installed as the node's own checkpoint too.
+22. **Bounded DAG representation (the open finding below, fixed
+    2026-11-15).** `poe-dag` no longer stores a full ancestor set
+    per block. Each block keeps an exact ancestor oracle — its
+    ancestors inside a 32-round window plus a frontier cut set —
+    which answers `is_ancestor` identically to the full set for
+    any window size, and its GHOSTDAG blues/reds as a rope over
+    the chosen-parent link, materialized on demand instead of
+    cloned per block. Stored reds are dropped (they were
+    write-only in production). Gate: a differential battery
+    against a verbatim copy of the previous implementation
+    (random DAGs at k = 0..3 with all-pairs ancestry checks, a
+    6-wide × 300-round mesh, a 2,000-block chain) — linearization,
+    blue scores, ghost data, and tip selection identical. Shaped
+    replay probes (release, this VM class): 3,595 blocks —
+    checksum identical, peak RSS 72 MB vs the old code's
+    1,696 MB; 11,991 blocks at the testnet's width — 419 MB (the
+    old curve is quadratic and does not run at that size here).
+    Memory is now linear in chain length. Honest caveat: replay
+    *time* keeps the old asymptotics (each insert materializes
+    the chosen parent's blues) and the oracle is ~1.6× slower per
+    block at 3.6k blocks; from-genesis replay is a from-scratch
+    catch-up cost only — nodes resume from finstate or a bundle.
+23. **Skip attestation — the liveness mechanism (owner-adopted
+    2026-11-15; specified in the Lean extension
+    `PoE_SkipAttestation.lean`, proved against the kernel's
+    Part B finality).** When a round is still unfinalized at the
+    next round's vote, that vote may carry a second XMSS
+    signature over a domain-separated `skip_message(round-1)`.
+    At more than two thirds of the attesting round's committee,
+    the stalled round finalizes as a null round (`NULL_BLOCK`:
+    no acts, no votes credited, nothing minted — grants are an
+    epoch-close function over finalized rounds and the null side
+    is not a DAG block). Block finality, once reached, is never
+    overridden by attestations; the Lean proof shows the two
+    outcomes can coexist only by naming more than a third of
+    validators in both supports. Finstate format bumped to
+    `POEFIN3` (adds the attestation tallies; older formats
+    degrade to the bundle resume as before). Battery
+    (`simnet_skip`): lost votes close as a null round and the
+    chain advances; attestations never override a block quorum.
+24. **Late attestations are inert (found by the battery above).**
+    An attestation counted only after its round already
+    finalized is neither tallied nor recorded — exactly like a
+    late vote. Without this, the conflict query named honest
+    machines as double actors (an attestation is cast against a
+    lagging local record and counted later). `skip_conflicts`
+    now reads only attestations that were live when counted,
+    and a hand-driven test names exactly the one machine that
+    attested a round empty while it was open and also voted for
+    the block that round finalized with.
 
-**Open finding — DAG memory (not fixed).** `poe-dag` keeps a full
-ancestor set per block; at the epoch-209 bundle (33k blocks) a
-node's steady memory is ~4.9 GB and grows quadratically with
-chain length. One node per 8 GB host is the practical limit at
-this size, and restarts of several nodes on one host kill each
-other during replay. The fix is a bounded ancestor
-representation in `poe-dag` (with a replay-equivalence test
-against a recorded bundle as its gate) — future work, recorded
-here rather than patched unilaterally at the end of a long
-deploy.
+**DAG memory — FIXED (2026-11-15, correction 22).** The finding
+stood at the epoch-209 bundle (33k blocks): ~4.9 GB steady,
+quadratic growth, one node per 8 GB host. The bounded
+representation above replaces it; retained memory is linear
+(419 MB peak replaying 11,991 blocks at testnet width, vs the
+old implementation's quadratic curve). Epoch *compaction* —
+dropping the finalized prefix at epoch closes — is specified
+but deliberately not implemented: the exactness analysis in
+the design record shows the naive form can diverge from a
+never-compacted node on long-lived forks, and the safe form
+(pruning point + reference closure + seed-aware restore) is
+its own gated step.
 
-Full workspace suite after all corrections: **75/75 tests
-pass** (2026-11-14). The liveness finding above stands unchanged:
-these fixes remove implementation stalls and forks, not the
-design's missing liveness mechanism.
+Full workspace suite after corrections 1–21: **75/75 tests
+pass** (2026-11-14). Corrections 22–24 (2026-11-15) bring the
+suite to **81/81 tests** — see the 2026-11-15 ops entry
+in `testnet/TESTNET.md`. The liveness mechanism the design was
+missing is implemented in corrections 23–24, testnet profile;
+the two-caps design gap from the Step 10 composition proof
+stands unchanged and is still the authors' decision.
 
 ## Residue (not done, not claimed)
 

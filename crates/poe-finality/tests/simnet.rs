@@ -102,13 +102,13 @@ fn run_sim(reverse_insertion: bool) -> (Finality, HashMap<u64, Machine>) {
             }
             if id <= 6 {
                 let sig = machines.get_mut(&id).unwrap().xmss.sign(&target).unwrap();
-                pending.push((round + 2, Vote { machine: id, round, block: target, sig }));
+                pending.push((round + 2, Vote { machine: id, round, block: target, sig, skip: None }));
             } else if id == 7 {
                 let other = *order.iter().rev().find(|x| of_round(x) && **x != target).unwrap();
                 let s1 = machines.get_mut(&7).unwrap().xmss.sign(&target).unwrap();
-                pending.push((round + 2, Vote { machine: 7, round, block: target, sig: s1 }));
+                pending.push((round + 2, Vote { machine: 7, round, block: target, sig: s1, skip: None }));
                 let s2 = machines.get_mut(&7).unwrap().xmss.sign(&other).unwrap();
-                pending.push((round + 2, Vote { machine: 7, round, block: other, sig: s2 }));
+                pending.push((round + 2, Vote { machine: 7, round, block: other, sig: s2, skip: None }));
             }
         }
     }
