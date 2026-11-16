@@ -56,6 +56,8 @@ function nodeBinary() {
 // development checkout.
 function bundlePath() {
   if (process.env.POE_BUNDLE_PATH) return process.env.POE_BUNDLE_PATH;
+  const packaged = path.join(process.resourcesPath || '', 'bundle.bin');
+  if (process.resourcesPath && fs.existsSync(packaged)) return packaged;
   const dev = path.join(__dirname, '..', 'testnet', 'bundle.bin');
   return fs.existsSync(dev) ? dev : null;
 }

@@ -55,11 +55,34 @@ through the same client the UI uses (including asserting the
 2026-11-16 against a fresh scratch node: all verbs answered,
 quote for 1e18 → 99966677774, screenshot rendered live data.
 
+## Linux packages
+
+```sh
+npm run dist          # AppImage + .deb into dist/
+npm run dist:appimage # just the AppImage
+npm run dist:deb      # just the .deb
+```
+
+The packages carry the node service with them: electron-
+builder places the release `poe-node` binary at
+`resources/bin/poe-node` and the testnet bundle at
+`resources/bundle.bin`, which is exactly where the shell
+looks (see `nodeBinary()` / `bundlePath()` in main.js) — an
+installed copy needs nothing else from this repo. Built and
+verified 2026-11-16: `PoE Suite-0.1.0.AppImage` (109 MB) and
+`poe-suite_0.1.0_amd64.deb` (75 MB); the AppImage was
+extracted and run in smoke mode against a fresh data
+directory — it started its bundled node, synced from its
+bundled bundle, and every control verb answered. The
+packages are **unsigned**: signing needs the owner's key
+(GPG for the .deb; AppImage signing is optional), and no key
+is configured in this repo.
+
 ## Not yet
 
-Installers and signed binaries (electron-builder wiring is
-the next packaging step), the Windows named-pipe client (the
-pipe server itself is shell-stage work on the node side), and
-macOS/Windows store vault backends. Testnet profile only —
-the V2 gate and mainnet gates are the node's, and the shell
+The Windows named-pipe client (the pipe server itself is
+shell-stage work on the node side), Windows/macOS packages
+and their store vault backends (DPAPI/Keychain), and signed
+binaries (owner's signing keys). Testnet profile only — the
+V2 gate and mainnet gates are the node's, and the shell
 inherits them.

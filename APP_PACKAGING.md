@@ -17,7 +17,7 @@ it does not redefine them.
 | Data-dir resolution | `poe-node paths` | exists (this phase) |
 | Service definition | `poe-node service-unit` (systemd user unit, Linux) | exists (this phase) |
 | Shell | The desktop UI over the control endpoint — **Electron** (owner's decision, 2026-11-16, over the Tauri recommendation, for the control it gives) | v1 built in `app/` — supervision, adoption, all control verbs wired; headless smoke verified |
-| Installers / signing | Per-OS packages and signed binaries | later in Phase 1 |
+| Installers / signing | Per-OS packages and signed binaries | **Linux done 2026-11-16:** AppImage + .deb via electron-builder, carrying the node binary + bundle as packaged resources; extracted-AppImage smoke run verified end-to-end. Unsigned (owner's signing key not configured). Windows/macOS packages later in Phase 1 |
 
 ## Data directory
 
