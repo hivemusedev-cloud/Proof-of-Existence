@@ -32,11 +32,21 @@
 //! Maturity, stated plainly (the Step 5 finish line also demands a
 //! security review and target-phone benchmarks — both external to this
 //! crate and still owed): the fold above is an *algebraic* accumulator.
-//! Binding the public root to the node's actual `H` (or to a
-//! Poseidon2-over-Goldilocks accumulator, the in-field hash this stack
-//! would use) is the hardening step that marries this layer to
-//! poe-kernel's data; the relation machinery — prove, verify, tamper
-//! rejection — is what is built and tested here.
+//! What marries this layer to poe-kernel's data is the **anchored
+//! seed** (2026-11-16): a binding made for a kernel object derives
+//! its fold seed from the node's actual `H` over the kind and the
+//! object's bytes (`anchored_seed`), and the anchored verifier
+//! recomputes that seed and refuses any proof presented for a
+//! different object or kind. The public root is then a fold *of that
+//! object's seed* — a proof cannot be re-targeted from one join,
+//! transfer, lock, show, tag or contract version to another. What
+//! remains deliberately undone: replacing the algebraic fold itself
+//! with a Poseidon2-over-Goldilocks accumulator inside the AIR. That
+//! is a constraint-system construction of its own (the pinned
+//! Plonky3 0.3 set carries the Poseidon2 permutation as a symmetric
+//! primitive, not as a uni-stark AIR), and hand-rolling it ahead of
+//! the external security review would trade an honestly-labelled
+//! algebraic fold for an unreviewed hash circuit — the worse risk.
 
 use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
 use p3_challenger::{HashChallenger, SerializingChallenger64};
@@ -52,6 +62,7 @@ use p3_matrix::Matrix;
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{Proof, StarkConfig, prove, verify};
+use poe_crypto::hash::{h_u64, Part};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -108,6 +119,20 @@ pub enum BindingKind {
 }
 
 impl BindingKind {
+    /// The kind's stable tag in the anchored-seed derivation. These
+    /// strings are part of the binding's identity: changing one
+    /// re-anchors every binding of that kind.
+    fn tag(self) -> &'static str {
+        match self {
+            BindingKind::JoinAdmission => "join-admission",
+            BindingKind::TransferSlotEpoch => "transfer-slot-epoch",
+            BindingKind::VestingLockOpen => "vesting-lock-open",
+            BindingKind::OfflineShowLine => "offline-show-line",
+            BindingKind::MessageTagSlot => "message-tag-slot",
+            BindingKind::ContractVersionExec => "contract-version-exec",
+        }
+    }
+
     /// The counter step per real row, as a field element (u64 form).
     fn delta_mod(self) -> u64 {
         match self {
@@ -129,6 +154,33 @@ pub struct Binding {
     pub items: Vec<u64>,
     pub seed: u64,
     pub check_start: u64,
+}
+
+impl Binding {
+    /// A binding anchored to a kernel object: the fold seed is
+    /// derived from the node's `H` over the kind and the object's
+    /// bytes (see `anchored_seed`), never chosen by the prover. The
+    /// `object` bytes are the kernel-side identifier of the thing
+    /// the statement is about — a join's admission record, a
+    /// transfer's slot entry, a lock, a coin line, a message tag, a
+    /// contract version — exactly as the kernel itself names it.
+    pub fn anchored(kind: BindingKind, object: &[u8], items: Vec<u64>, check_start: u64) -> Binding {
+        Binding { kind, items, seed: anchored_seed(kind, object), check_start }
+    }
+}
+
+/// The anchored fold seed for a binding: the node's actual `H`
+/// (poe-crypto, byte-exact with the Compute Seed) over the domain
+/// tag "zk-binding", the kind's tag, and the object's bytes,
+/// reduced into the Goldilocks field. Because the seed is a public
+/// input and the root is a fold of it, anchoring the seed anchors
+/// the whole statement: the same items folded for a different
+/// object or kind land on a different root, and the anchored
+/// verifier below recomputes the seed independently.
+pub fn anchored_seed(kind: BindingKind, object: &[u8]) -> u64 {
+    const P: u128 = 0xFFFF_FFFF_0000_0001; // Goldilocks modulus
+    let raw = h_u64("zk-binding", &[Part::Bytes(kind.tag().as_bytes()), Part::Bytes(object)]);
+    (raw as u128 % P) as u64
 }
 
 /// Public inputs layout: `[seed, root, check_start, check_end]`.
@@ -221,7 +273,10 @@ fn fold_acc(seed: u64, items: &[u64]) -> u64 {
 
 /// Prove a binding. Returns the proof and its public inputs; the caller
 /// (the kernel side) checks `pis[1]` (the root) and `pis[3]` (the counter
-/// end) against its own records — that comparison is the binding.
+/// end) against its own records — that comparison is the binding. For a
+/// binding made with `Binding::anchored`, the kernel side instead calls
+/// `verify_anchored`, which also recomputes `pis[0]` from the object's
+/// `H` anchor.
 pub fn prove_binding(b: &Binding) -> Result<(BindingProof, PublicInputs), String> {
     if b.items.is_empty() {
         return Err("a binding needs at least one item".into());
@@ -284,6 +339,23 @@ pub fn verify_binding(
     verify(&config, &air, proof, &pis_v).map_err(|e| format!("{e:?}"))
 }
 
+/// Verify an anchored binding: the proof's public seed must equal
+/// the seed the node's `H` derives for THIS kind and object —
+/// recomputed here, never taken from the proof — and the proof
+/// itself must verify against the public inputs. A proof anchored
+/// to any other object or kind is refused before the STARK check.
+pub fn verify_anchored(
+    kind: BindingKind,
+    object: &[u8],
+    proof: &BindingProof,
+    pis: &PublicInputs,
+) -> Result<(), String> {
+    if pis[0] != anchored_seed(kind, object) {
+        return Err("seed is not the H-anchored seed for this kind and object".into());
+    }
+    verify_binding(kind, proof, pis)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,6 +408,37 @@ mod tests {
         assert!(verify_binding(BindingKind::TransferSlotEpoch, &proof, &bad3).is_err());
         // The wrong kind (different counter step) rejects the same proof.
         assert!(verify_binding(BindingKind::JoinAdmission, &proof, &pis).is_err());
+    }
+
+    #[test]
+    fn anchored_bindings_verify_only_for_their_object() {
+        let object_a = b"join: machine 7, epoch 3";
+        let object_b = b"join: machine 8, epoch 3";
+        let b = Binding::anchored(
+            BindingKind::JoinAdmission,
+            object_a,
+            vec![11, 22, 33, 44, 55],
+            5,
+        );
+        let (proof, pis) = prove_binding(&b).expect("prove");
+        assert_eq!(pis[0], anchored_seed(BindingKind::JoinAdmission, object_a));
+        verify_anchored(BindingKind::JoinAdmission, object_a, &proof, &pis)
+            .expect("the anchored proof must verify for its own object");
+        // The proof is a valid STARK for its public inputs, but it is
+        // not a statement about another object, nor about the same
+        // object under another kind: the anchored verifier refuses
+        // both before the STARK check.
+        assert!(verify_anchored(BindingKind::JoinAdmission, object_b, &proof, &pis).is_err());
+        assert!(verify_anchored(BindingKind::TransferSlotEpoch, object_a, &proof, &pis).is_err());
+        // The anchor itself is object- and kind-specific.
+        assert_ne!(
+            anchored_seed(BindingKind::JoinAdmission, object_a),
+            anchored_seed(BindingKind::JoinAdmission, object_b)
+        );
+        assert_ne!(
+            anchored_seed(BindingKind::JoinAdmission, object_a),
+            anchored_seed(BindingKind::TransferSlotEpoch, object_a)
+        );
     }
 
     #[test]

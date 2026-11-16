@@ -24,7 +24,7 @@ use poe_crypto::hash::{h, Part, H512};
 use poe_crypto::pq;
 use poe_crypto::tickets::{ticket_score, verify_reveal};
 use poe_crypto::xmss::{self, XmssSignature, H32};
-use poe_dag::{Block, BlockId, Dag};
+use poe_dag::{Block, BlockId, Dag, DagState};
 use poe_kernel::{ClaimOutcome, Registry, RegistryKind, Spend};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -753,6 +753,14 @@ pub struct FinalitySnapshot {
     pub used_leaves: Vec<(u64, Vec<u64>)>,
     pub finalized: Vec<(u64, BlockId)>,
     pub dag_blocks: Vec<Block>,
+    /// The DAG's full retained state (cores, oracles, compaction
+    /// seeds), carried alongside `dag_blocks` since 2026-11-16.
+    /// `restore` prefers it: re-inserting `dag_blocks` cannot
+    /// restore a pruned DAG (a seed block's parents are gone, and
+    /// its precomputed core is the only exact record). `None` for
+    /// snapshots decoded from pre-compaction formats, which restore
+    /// by re-insertion exactly as before.
+    pub dag_state: Option<DagState>,
 }
 
 /// The base snapshot PLUS the live working state (committees,
@@ -801,22 +809,32 @@ impl Finality {
                 .collect(),
             finalized: self.finalized.iter().map(|(r, b)| (*r, *b)).collect(),
             dag_blocks: self.dag.blocks(),
+            dag_state: Some(self.dag.export_state()),
         }
     }
 
     pub fn restore(snap: FinalitySnapshot) -> Finality {
         let mut fin = Finality::new(snap.k, snap.rounds_per_epoch);
-        // Insert in causal order, not snapshot order: a block may
-        // parent a same-round block, so the snapshot's (round, id)
-        // sort can list a child before its parent, and a single pass
-        // would silently drop the child — including, fatally, a
-        // finalized one. Repeat passes until nothing more fits.
-        let mut pending = snap.dag_blocks;
-        loop {
-            let before = pending.len();
-            pending.retain(|b| fin.dag.insert(b.clone()).is_err());
-            if pending.is_empty() || pending.len() == before {
-                break;
+        if let Some(state) = snap.dag_state {
+            // Seed-aware restore (2026-11-16): the state carries
+            // every block's core and oracle plus the compaction
+            // seeds, so a pruned DAG restores exactly — no
+            // re-insertion, nothing silently dropped.
+            fin.dag = Dag::from_state(snap.k, state);
+        } else {
+            // Legacy path: insert in causal order, not snapshot
+            // order: a block may parent a same-round block, so the
+            // snapshot's (round, id) sort can list a child before
+            // its parent, and a single pass would silently drop the
+            // child — including, fatally, a finalized one. Repeat
+            // passes until nothing more fits.
+            let mut pending = snap.dag_blocks;
+            loop {
+                let before = pending.len();
+                pending.retain(|b| fin.dag.insert(b.clone()).is_err());
+                if pending.is_empty() || pending.len() == before {
+                    break;
+                }
             }
         }
         for (id, info) in snap.machines {

@@ -26,7 +26,7 @@ use poe_crypto::hash::{h, h_u64, Part, H512};
 use poe_crypto::pq::DsaKeypair;
 use poe_crypto::tickets::TicketChain;
 use poe_crypto::xmss::XmssKey;
-use poe_dag::{decode_block, encode_block, Block};
+use poe_dag::{decode_block, encode_block, Block, BlockState, DagState};
 use poe_epoch::{EpochEngine, Launch, Profile};
 use poe_finality::{
     decode_announcement, decode_vote, encode_announcement, encode_vote, Announcement, Finality,
@@ -303,6 +303,13 @@ fn heartbeat_msg(machine: u64, epoch: u64, sig: &[u8], nonce: u64) -> Vec<u8> {
 // -- sync bundle (one file: store snapshot + finality snapshot + meta) -------
 
 const BUNDLE_MAGIC: &[u8; 8] = b"POEBNDL1";
+/// POEBNDL2 (2026-11-16): appends the DAG's full retained state
+/// (see `w_dag_state`) after the announcements, so a bundle written
+/// by a node whose DAG is pruned restores exactly. Readers accept
+/// both magics; v1 bundles restore the DAG by re-insertion, as
+/// before — the published epoch-209 anchor bundle is a v1 file and
+/// stays readable.
+const BUNDLE_MAGIC_V2: &[u8; 8] = b"POEBNDL2";
 
 fn w_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_be_bytes());
@@ -313,6 +320,65 @@ fn w_u64(out: &mut Vec<u8>, v: u64) {
 fn w_bytes(out: &mut Vec<u8>, b: &[u8]) {
     w_u64(out, b.len() as u64);
     out.extend_from_slice(b);
+}
+fn w_id(out: &mut Vec<u8>, id: &H512) {
+    out.extend_from_slice(id);
+}
+fn w_ids(out: &mut Vec<u8>, ids: &[H512]) {
+    w_u32(out, ids.len() as u32);
+    for id in ids {
+        w_id(out, id);
+    }
+}
+
+/// The DagState section shared by the bundle (v2) and the finstate
+/// (POEFIN4): genesis, per-block states (block, core, oracle), then
+/// the compaction seeds and the tip-guard set. A presence byte
+/// precedes it at each call site.
+fn w_dag_state(out: &mut Vec<u8>, st: &DagState) {
+    match st.genesis {
+        Some(g) => {
+            out.push(1);
+            w_id(out, &g);
+        }
+        None => out.push(0),
+    }
+    w_u32(out, st.blocks.len() as u32);
+    for bs in &st.blocks {
+        w_bytes(out, &encode_block(&bs.block));
+        match bs.chosen {
+            Some(c) => {
+                out.push(1);
+                w_id(out, &c);
+            }
+            None => out.push(0),
+        }
+        w_ids(out, &bs.mergeset_order);
+        w_ids(out, &bs.accepted);
+        w_ids(out, &bs.rejected);
+        w_u64(out, bs.blue_score);
+        w_ids(out, &bs.base_blues);
+        w_ids(out, &bs.base_reds);
+        w_ids(out, &bs.window);
+        w_ids(out, &bs.frontier);
+    }
+    w_u32(out, st.seed_rounds.len() as u32);
+    for (id, r) in &st.seed_rounds {
+        w_id(out, id);
+        w_u64(out, *r);
+    }
+    w_u32(out, st.seed_parents.len() as u32);
+    for (id, ps) in &st.seed_parents {
+        w_id(out, id);
+        w_ids(out, ps);
+    }
+    w_u32(out, st.seed_anc.len() as u32);
+    for (id, w, f) in &st.seed_anc {
+        w_id(out, id);
+        w_ids(out, w);
+        w_ids(out, f);
+    }
+    w_ids(out, &st.pruned_children);
 }
 
 struct Cursor<'a> {
@@ -342,6 +408,74 @@ impl<'a> Cursor<'a> {
     }
 }
 
+fn r_id(c: &mut Cursor) -> io::Result<H512> {
+    Ok(c.take(64)?.try_into().expect("64"))
+}
+fn r_ids(c: &mut Cursor) -> io::Result<Vec<H512>> {
+    let n = c.u32()?;
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        out.push(r_id(c)?);
+    }
+    Ok(out)
+}
+fn r_opt_id(c: &mut Cursor) -> io::Result<Option<H512>> {
+    match c.take(1)?[0] {
+        1 => Ok(Some(r_id(c)?)),
+        _ => Ok(None),
+    }
+}
+
+/// Read the DagState section written by `w_dag_state`, including
+/// its presence byte.
+fn r_dag_state(c: &mut Cursor) -> io::Result<Option<DagState>> {
+    if c.take(1)?[0] == 0 {
+        return Ok(None);
+    }
+    let genesis = r_opt_id(c)?;
+    let nb = c.u32()?;
+    let mut blocks = Vec::with_capacity(nb as usize);
+    for _ in 0..nb {
+        let raw = c.bytes()?;
+        let block = decode_block(&raw)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "dag state block"))?;
+        blocks.push(BlockState {
+            block,
+            chosen: r_opt_id(c)?,
+            mergeset_order: r_ids(c)?,
+            accepted: r_ids(c)?,
+            rejected: r_ids(c)?,
+            blue_score: c.u64()?,
+            base_blues: r_ids(c)?,
+            base_reds: r_ids(c)?,
+            window: r_ids(c)?,
+            frontier: r_ids(c)?,
+        });
+    }
+    let nr = c.u32()?;
+    let mut seed_rounds = Vec::with_capacity(nr as usize);
+    for _ in 0..nr {
+        seed_rounds.push((r_id(c)?, c.u64()?));
+    }
+    let np = c.u32()?;
+    let mut seed_parents = Vec::with_capacity(np as usize);
+    for _ in 0..np {
+        let id = r_id(c)?;
+        let ps = r_ids(c)?;
+        seed_parents.push((id, ps));
+    }
+    let na = c.u32()?;
+    let mut seed_anc = Vec::with_capacity(na as usize);
+    for _ in 0..na {
+        let id = r_id(c)?;
+        let w = r_ids(c)?;
+        let f = r_ids(c)?;
+        seed_anc.push((id, w, f));
+    }
+    let pruned_children = r_ids(c)?;
+    Ok(Some(DagState { genesis, blocks, seed_rounds, seed_parents, seed_anc, pruned_children }))
+}
+
 pub struct Bundle {
     pub sync_epoch: u64,
     pub sync_round: u64,
@@ -359,7 +493,7 @@ fn write_bundle(
     sync_round: u64,
 ) -> io::Result<()> {
     let mut out = Vec::new();
-    out.extend_from_slice(BUNDLE_MAGIC);
+    out.extend_from_slice(BUNDLE_MAGIC_V2);
     w_u64(&mut out, sync_epoch);
     w_u64(&mut out, sync_round);
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
@@ -411,6 +545,14 @@ fn write_bundle(
     for a in announcements.values() {
         w_bytes(&mut out, &encode_announcement(a));
     }
+    // POEBNDL2 trailing section: the DAG's full retained state.
+    match &snap.dag_state {
+        Some(st) => {
+            out.push(1);
+            w_dag_state(&mut out, st);
+        }
+        None => out.push(0),
+    }
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, &out)?;
     std::fs::rename(&tmp, path)?;
@@ -420,9 +562,14 @@ fn write_bundle(
 pub fn read_bundle(path: &Path) -> io::Result<Bundle> {
     let raw = std::fs::read(path)?;
     let mut c = Cursor { raw: &raw, off: 0 };
-    if c.take(8)? != BUNDLE_MAGIC {
+    let magic = c.take(8)?;
+    let bundle_v2 = if magic == BUNDLE_MAGIC_V2 {
+        true
+    } else if magic == BUNDLE_MAGIC {
+        false
+    } else {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "not a poe bundle"));
-    }
+    };
     let sync_epoch = c.u64()?;
     let sync_round = c.u64()?;
     let nf = c.u32()?;
@@ -486,6 +633,7 @@ pub fn read_bundle(path: &Path) -> io::Result<Bundle> {
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bundle announcement"))?,
         );
     }
+    let dag_state = if bundle_v2 { r_dag_state(&mut c)? } else { None };
     Ok(Bundle {
         sync_epoch,
         sync_round,
@@ -498,6 +646,7 @@ pub fn read_bundle(path: &Path) -> io::Result<Bundle> {
             used_leaves,
             finalized,
             dag_blocks,
+            dag_state,
         },
         announcements,
     })
@@ -515,10 +664,12 @@ pub fn read_bundle(path: &Path) -> io::Result<Bundle> {
 
 // POEFIN2: adds the per-round frozen draw denominators (draw_base).
 // POEFIN3: adds the skip-attestation tallies (skip_votes).
+// POEFIN4: adds the DAG's full retained state (dag_state), so a
+// node whose DAG is pruned resumes exactly instead of re-inserting.
 // A file with an older magic is refused by the magic check and the
 // node falls back to a bundle/store resume — never a hard failure
 // (see the resume selection in run_testnet).
-const FINSTATE_MAGIC: &[u8; 8] = b"POEFIN3\0";
+const FINSTATE_MAGIC: &[u8; 8] = b"POEFIN4\0";
 
 /// The set of rounds a starting node must never vote in.
 ///
@@ -678,6 +829,14 @@ fn write_finstate(path: &Path, fin: &Finality, next_apply: u64) -> io::Result<()
         for m in vs {
             w_u64(&mut out, *m);
         }
+    }
+    // POEFIN4 trailing section: the DAG's full retained state.
+    match &base.dag_state {
+        Some(st) => {
+            out.push(1);
+            w_dag_state(&mut out, st);
+        }
+        None => out.push(0),
     }
     let tmp = path.with_extension("tmp");
     {
@@ -844,6 +1003,7 @@ fn read_finstate(path: &Path) -> io::Result<(Finality, u64)> {
         }
         skip_votes.push((r, vs));
     }
+    let dag_state = r_dag_state(&mut c)?;
     let mut canons = canons.into_iter();
     let mut all_regs = all_regs.into_iter();
     let mut counters_all = counters_all.into_iter();
@@ -856,6 +1016,7 @@ fn read_finstate(path: &Path) -> io::Result<(Finality, u64)> {
             used_leaves,
             finalized,
             dag_blocks,
+            dag_state,
         },
         floor_round,
         committees,
@@ -1179,6 +1340,30 @@ impl Node {
             credited.len(),
             root
         );
+        // Epoch compaction (2026-11-16): with this epoch closed,
+        // the history below its first round is final and applied —
+        // try to prune it, anchored at that round's finalized
+        // block. prune() verifies the pruning-point condition
+        // (the anchor must be an ancestor of every current tip)
+        // and the reference closure itself, and drops nothing when
+        // either fails — e.g. while a long-lived fork's tip does
+        // not yet descend from the anchor; the next epoch's close
+        // retries. Runs BEFORE the bundle write, so the bundle
+        // carries the pruned state (whose seeds restore exactly).
+        // A peer too far behind to be served from the retained DAG
+        // falls back to this bundle, as before.
+        if epoch >= 1 {
+            if let Some(anchor) = self.fin.finalized.get(&(epoch * rpe)).copied() {
+                let dropped = self.fin.dag.prune(&anchor);
+                if dropped > 0 {
+                    println!(
+                        "PRUNE epoch={epoch} anchor_round={} dropped={dropped} retained={}",
+                        epoch * rpe,
+                        self.fin.dag.blocks().len()
+                    );
+                }
+            }
+        }
         let bundle_path = dir.join("bundle.bin");
         write_bundle(
             &bundle_path,

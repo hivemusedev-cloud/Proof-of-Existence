@@ -1,5 +1,14 @@
 # poe-zk benchmarks — Step 5 residue (partial)
 
+Update 2026-11-16: the H-binding residue item landed as the
+anchored seed (the fold seed derived from the node's `H`; see the
+crate docs). It does not change the circuit — anchoring is one `H`
+call at binding construction and one at verification — so every
+figure below stands unchanged. The in-circuit Poseidon2
+accumulator remains deliberately unbuilt (crate docs give the
+reasoning); external security review and on-device phone
+benchmarks remain owed.
+
 Measured 2026-11-14 on the build VM (AMD EPYC 9D25, shared vCPU,
 release build) with `cargo run --release -p poe-zk --example
 bench_binding`. Medians of 3–7 prove runs and 15–25 verify runs per

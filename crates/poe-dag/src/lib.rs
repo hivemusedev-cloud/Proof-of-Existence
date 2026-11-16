@@ -94,6 +94,37 @@ pub struct GhostData {
     pub blue_score: u64,
 }
 
+/// One block's full retained state, as carried by `DagState`:
+/// the block itself, its GHOSTDAG core (with compaction base lists),
+/// and its ancestor-oracle window/frontier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockState {
+    pub block: Block,
+    pub chosen: Option<BlockId>,
+    pub mergeset_order: Vec<BlockId>,
+    pub accepted: Vec<BlockId>,
+    pub rejected: Vec<BlockId>,
+    pub blue_score: u64,
+    pub base_blues: Vec<BlockId>,
+    pub base_reds: Vec<BlockId>,
+    pub window: Vec<BlockId>,
+    pub frontier: Vec<BlockId>,
+}
+
+/// A whole DAG's retained state (see `Dag::export_state`): the
+/// blocks' states plus the compaction seeds — pruned blocks' rounds,
+/// and the parents/oracle of the bounded seed band around the
+/// pruning point — and the tip-guard set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DagState {
+    pub genesis: Option<BlockId>,
+    pub blocks: Vec<BlockState>,
+    pub seed_rounds: Vec<(BlockId, u64)>,
+    pub seed_parents: Vec<(BlockId, Vec<BlockId>)>,
+    pub seed_anc: Vec<(BlockId, Vec<BlockId>, Vec<BlockId>)>,
+    pub pruned_children: Vec<BlockId>,
+}
+
 /// What is actually retained per block: the selected parent, the blue
 /// score, the mergeset in consideration order, and the two rope links —
 /// the candidates this block accepted into / rejected from the blues
@@ -107,6 +138,14 @@ struct GhostCore {
     accepted: Vec<BlockId>,
     rejected: Vec<BlockId>,
     blue_score: u64,
+    /// Compaction cut data (2026-11-16): when pruning drops this
+    /// block's chosen parent, the chain is cut here — `chosen`
+    /// becomes None and the dropped parent's contribution is
+    /// materialized into these base lists, so `blues_of`/`reds_of`
+    /// return exactly the pre-prune lists. Empty for every block
+    /// that was never cut (including genesis).
+    base_blues: Vec<BlockId>,
+    base_reds: Vec<BlockId>,
 }
 
 /// Exact ancestor oracle data for one block.
@@ -137,6 +176,25 @@ pub struct Dag {
     anc: HashMap<BlockId, Anc>,
     children: HashMap<BlockId, Vec<BlockId>>,
     genesis: Option<BlockId>,
+    /// Compaction seed data (2026-11-16): what survives of a pruned
+    /// block. `seed_rounds` holds the round of EVERY pruned block
+    /// (8 bytes each — the round check in `is_ancestor` must keep
+    /// working for pruned ids, because retained blocks' blue lists
+    /// and windows still name them). `seed_parents` / `seed_anc`
+    /// hold the parents / ancestor-oracle of only the pruned blocks
+    /// that retained data can still reach: blocks named in a
+    /// retained block's window (their parents feed the frontier
+    /// computation of future inserts) and blocks on a retained
+    /// block's frontier-descent closure (their oracle answers deep
+    /// ancestry queries). Both sets are bounded bands around the
+    /// pruning point, independent of total history length.
+    seed_rounds: HashMap<BlockId, u64>,
+    seed_parents: HashMap<BlockId, Vec<BlockId>>,
+    seed_anc: HashMap<BlockId, Anc>,
+    /// Blocks that have at least one pruned child. Such a block must
+    /// never surface as a tip: in the unpruned DAG it is not one,
+    /// and a future proposal taking it as a parent would diverge.
+    pruned_children: HashSet<BlockId>,
     /// The GHOSTDAG cluster parameter: how many blue blocks may sit in a
     /// candidate's anticone before the candidate turns red.
     pub k: u64,
@@ -150,6 +208,10 @@ impl Dag {
             anc: HashMap::new(),
             children: HashMap::new(),
             genesis: None,
+            seed_rounds: HashMap::new(),
+            seed_parents: HashMap::new(),
+            seed_anc: HashMap::new(),
+            pruned_children: HashSet::new(),
             k,
         }
     }
@@ -163,7 +225,20 @@ impl Dag {
     }
 
     fn round_of(&self, id: &BlockId) -> Option<u64> {
-        self.blocks.get(id).map(|b| b.round)
+        self.blocks
+            .get(id)
+            .map(|b| b.round)
+            .or_else(|| self.seed_rounds.get(id).copied())
+    }
+
+    /// A block's parents: from the block itself when retained, else
+    /// from the compaction seeds (a retained block's mergeset walk
+    /// and frontier computation can step onto a pruned parent).
+    fn parents_of(&self, id: &BlockId) -> Vec<BlockId> {
+        if let Some(b) = self.blocks.get(id) {
+            return b.parents.clone();
+        }
+        self.seed_parents.get(id).cloned().unwrap_or_default()
     }
 
     /// Materialize a block's full blue list by walking selected-parent
@@ -180,7 +255,10 @@ impl Dag {
                 None => break,
             }
         }
-        let mut out: Vec<BlockId> = Vec::new();
+        // Seed with the deepest core's compaction base (empty unless
+        // the chain was cut there by pruning — then it is exactly the
+        // blues the dropped chosen parent contributed).
+        let mut out: Vec<BlockId> = chain.last().expect("nonempty chain").base_blues.clone();
         // Unwind from genesis upward: each level contributes its chosen
         // (which is the next level down's block) then its accepted.
         for (i, g) in chain.iter().enumerate().rev() {
@@ -207,7 +285,7 @@ impl Dag {
                 None => break,
             }
         }
-        let mut out: Vec<BlockId> = Vec::new();
+        let mut out: Vec<BlockId> = chain.last().expect("nonempty chain").base_reds.clone();
         for g in chain.iter().rev() {
             out.extend(g.rejected.iter().copied());
         }
@@ -238,7 +316,12 @@ impl Dag {
         if ra > ro {
             return false;
         }
-        let a = &self.anc[of];
+        // The oracle data lives with the block when retained, and in
+        // the compaction seeds when `of` itself was pruned (frontier
+        // descent steps onto pruned blocks by design).
+        let Some(a) = self.anc.get(of).or_else(|| self.seed_anc.get(of)) else {
+            return false;
+        };
         if ra >= Self::cutoff(ro) {
             return a.window.binary_search(anc).is_ok();
         }
@@ -253,7 +336,10 @@ impl Dag {
         let mut t: Vec<BlockId> = self
             .blocks
             .keys()
-            .filter(|&id| self.children.get(id).map(|c| c.is_empty()).unwrap_or(true))
+            .filter(|&id| {
+                self.children.get(id).map(|c| c.is_empty()).unwrap_or(true)
+                    && !self.pruned_children.contains(id)
+            })
             .copied()
             .collect();
         t.sort();
@@ -289,7 +375,7 @@ impl Dag {
                 continue; // in the chosen past: prune the whole subtree
             }
             out.insert(x);
-            stack.extend(self.blocks[&x].parents.iter().copied());
+            stack.extend(self.parents_of(&x));
         }
         out
     }
@@ -323,10 +409,18 @@ impl Dag {
                 retained.extend(pa.frontier.iter().copied());
             }
             let cut = Self::cutoff(block.round);
+            // Rounds come from `round_of`, not `blocks`: after a
+            // prune, a retained id may name a pruned block, whose
+            // round lives in the seed map. Defaulting those to the
+            // new block's own round (the pre-compaction behavior,
+            // correct only for the new block itself) would promote
+            // deep pruned ancestors into the window, where the
+            // round-gated window branch of `is_ancestor` never looks
+            // for them — the replay gate caught exactly that.
             let mut window: Vec<BlockId> = retained
                 .iter()
                 .copied()
-                .filter(|x| self.blocks.get(x).map(|b| b.round).unwrap_or(block.round) >= cut)
+                .filter(|x| self.round_of(x).unwrap_or(block.round) >= cut)
                 .collect();
             window.sort();
             window.dedup();
@@ -335,12 +429,15 @@ impl Dag {
             for y in &window {
                 // Parents of every window block; the new block itself is
                 // not in `blocks` yet, so its parents come from `block`.
-                let parents: &[BlockId] = if *y == block.id {
-                    &block.parents
+                // A window block may have been pruned (its id persists
+                // in windows by design) — `parents_of` falls back to
+                // the compaction seeds for those.
+                let parents: Vec<BlockId> = if *y == block.id {
+                    block.parents.clone()
                 } else {
-                    &self.blocks[y].parents
+                    self.parents_of(y)
                 };
-                for par in parents {
+                for par in &parents {
                     if !winset.contains(par) {
                         frontier.push(*par);
                     }
@@ -352,7 +449,15 @@ impl Dag {
         };
 
         let ghost = if block.parents.is_empty() {
-            GhostCore { chosen: None, mergeset_order: vec![], accepted: vec![], rejected: vec![], blue_score: 0 }
+            GhostCore {
+                chosen: None,
+                mergeset_order: vec![],
+                accepted: vec![],
+                rejected: vec![],
+                blue_score: 0,
+                base_blues: vec![],
+                base_reds: vec![],
+            }
         } else {
             // Selected parent: greatest blue score, tie -> smallest id.
             let chosen = *block
@@ -394,7 +499,15 @@ impl Dag {
                 }
             }
             let blue_score = blues.len() as u64;
-            GhostCore { chosen: Some(chosen), mergeset_order: order, accepted, rejected, blue_score }
+            GhostCore {
+                chosen: Some(chosen),
+                mergeset_order: order,
+                accepted,
+                rejected,
+                blue_score,
+                base_blues: vec![],
+                base_reds: vec![],
+            }
         };
 
         for p in &block.parents {
@@ -405,6 +518,252 @@ impl Dag {
         self.ghost.insert(block.id, ghost);
         self.blocks.insert(block.id, block);
         Ok(())
+    }
+
+    /// Epoch compaction (2026-11-16): drop the history below a
+    /// pruning point, exactly — every future insert, blue score,
+    /// ancestry answer (over retained blocks, and over pruned ids
+    /// where retained data still names them), tip selection, and
+    /// vote target is identical to the unpruned DAG. The design is
+    /// the one specified in PROPOSAL_LIVENESS_AND_DAG_STORAGE.md §2,
+    /// with all three of its conditions:
+    ///
+    /// 1. **Pruning point, not an epoch line.** `anchor` must be an
+    ///    ancestor of every current tip; otherwise nothing is
+    ///    dropped (returns 0). Every dropped block is then in the
+    ///    past of every future insert's selected parent, so a
+    ///    dropped block can never sit in a future candidate's
+    ///    anticone — the divergence the naive form suffered.
+    /// 2. **Reference closure.** A candidate (strict ancestor of the
+    ///    anchor) survives if any surviving block reaches it through
+    ///    `mergeset_order` / `accepted` / `rejected` — the lists the
+    ///    linearization walk and the rope materialization traverse.
+    ///    Two reference kinds are discharged instead of protected:
+    ///    *chosen* links are cut, with the dropped parent's blues
+    ///    and reds materialized into the survivor's base lists (so
+    ///    `ghost()` of every survivor is byte-identical), and
+    ///    *parent* links are discharged into the seed maps below.
+    /// 3. **Seed-aware state.** A pruned block leaves behind exactly
+    ///    what retained data can still reach: its round (always —
+    ///    retained blue lists and windows name pruned ids, and the
+    ///    round check must keep answering), and — for the bounded
+    ///    band of pruned blocks named in survivors' windows or on
+    ///    their frontier-descent closure — its parents and its
+    ///    ancestor oracle. `export_state`/`from_state` carry the
+    ///    seeds, so a snapshot of a pruned DAG restores exactly,
+    ///    including blocks whose parents were pruned (they restore
+    ///    from their carried cores, never by re-insertion).
+    ///
+    /// What pruning gives up, by design: `linearize()` ranges over
+    /// the retained DAG only (the dropped prefix is gone from the
+    /// order; the relative order of retained blocks at and above
+    /// the anchor region is unchanged, and the node's
+    /// consensus-critical uses — the vote target among recent
+    /// rounds, application via the finalized map — never read the
+    /// dropped prefix), and `get()` no longer returns pruned
+    /// blocks. Returns the number of blocks dropped.
+    pub fn prune(&mut self, anchor: &BlockId) -> usize {
+        if !self.blocks.contains_key(anchor) {
+            return 0;
+        }
+        // (1) The pruning-point check.
+        for t in self.tips() {
+            if !self.is_ancestor(anchor, &t) {
+                return 0;
+            }
+        }
+        // Candidates: strict ancestors of the anchor.
+        let candidates: HashSet<BlockId> = self
+            .blocks
+            .keys()
+            .copied()
+            .filter(|x| *x != *anchor && self.is_ancestor(x, anchor))
+            .collect();
+        if candidates.is_empty() {
+            return 0;
+        }
+        // (2) Protection: worklist over the protecting references
+        // (mergeset_order / accepted / rejected), seeded with every
+        // non-candidate. A candidate referenced by a retained block
+        // is retained, and its own references then protect too.
+        let mut retained: HashSet<BlockId> =
+            self.blocks.keys().copied().filter(|x| !candidates.contains(x)).collect();
+        let mut queue: Vec<BlockId> = retained.iter().copied().collect();
+        while let Some(r) = queue.pop() {
+            let g = &self.ghost[&r];
+            for x in g.mergeset_order.iter().chain(&g.accepted).chain(&g.rejected) {
+                if candidates.contains(x) && retained.insert(*x) {
+                    queue.push(*x);
+                }
+            }
+        }
+        let drop_set: HashSet<BlockId> = candidates.difference(&retained).copied().collect();
+        if drop_set.is_empty() {
+            return 0;
+        }
+        // Cut every survivor's chosen link into the drop set,
+        // materializing the dropped parent's blues/reds into the
+        // survivor's base lists — computed now, while the chains
+        // are still intact.
+        let cuts: Vec<(BlockId, Vec<BlockId>, Vec<BlockId>)> = self
+            .ghost
+            .iter()
+            .filter(|(id, _)| !drop_set.contains(*id))
+            .filter_map(|(id, g)| g.chosen.filter(|c| drop_set.contains(c)).map(|c| (*id, c)))
+            .map(|(id, c)| {
+                let mut base_blues = self.blues_of(&c);
+                base_blues.push(c);
+                (id, base_blues, self.reds_of(&c))
+            })
+            .collect();
+        for (id, base_blues, base_reds) in cuts {
+            let g = self.ghost.get_mut(&id).expect("survivor core");
+            g.base_blues = base_blues;
+            g.base_reds = base_reds;
+            g.chosen = None;
+        }
+        // (3) Seed sets: pruned blocks named in a survivor's window
+        // or frontier, closed under frontier (and window) descent —
+        // a bounded band around the pruning point. The sources are
+        // every oracle that survives this prune: retained blocks'
+        // own, AND the seeds carried from earlier prunes — a descent
+        // that passes through an old seed continues into that seed's
+        // frontier, whose members are being dropped only now. (The
+        // first version of this scan skipped the old seeds, and the
+        // replay gate caught a lost ancestry answer exactly there.)
+        let mut seed_set: HashSet<BlockId> = HashSet::new();
+        let mut sq: Vec<BlockId> = Vec::new();
+        for (id, a) in &self.anc {
+            if drop_set.contains(id) {
+                continue;
+            }
+            for x in a.window.iter().chain(&a.frontier) {
+                if drop_set.contains(x) && seed_set.insert(*x) {
+                    sq.push(*x);
+                }
+            }
+        }
+        for a in self.seed_anc.values() {
+            for x in a.window.iter().chain(&a.frontier) {
+                if drop_set.contains(x) && seed_set.insert(*x) {
+                    sq.push(*x);
+                }
+            }
+        }
+        while let Some(f) = sq.pop() {
+            for x in self.anc[&f].window.iter().chain(&self.anc[&f].frontier) {
+                if drop_set.contains(x) && seed_set.insert(*x) {
+                    sq.push(*x);
+                }
+            }
+        }
+        // Move the seeds out, mark tip guards, then remove the blocks.
+        let dropped = drop_set.len();
+        for x in &drop_set {
+            self.seed_rounds.insert(*x, self.blocks[x].round);
+            if seed_set.contains(x) {
+                self.seed_parents.insert(*x, self.blocks[x].parents.clone());
+                self.seed_anc.insert(*x, self.anc[x].clone());
+            }
+            for p in &self.blocks[x].parents {
+                if !drop_set.contains(p) {
+                    self.pruned_children.insert(*p);
+                }
+            }
+        }
+        for x in &drop_set {
+            self.blocks.remove(x);
+            self.ghost.remove(x);
+            self.anc.remove(x);
+            self.children.remove(x);
+        }
+        for c in self.children.values_mut() {
+            c.retain(|id| !drop_set.contains(id));
+        }
+        dropped
+    }
+
+    /// The full retained state of the DAG, in a form a snapshot can
+    /// carry and `from_state` can restore exactly — including the
+    /// compaction seeds, so a pruned DAG survives a snapshot/restore
+    /// round trip with every answer intact. (The blocks-only path —
+    /// `blocks()` + re-insertion — cannot do this: a block whose
+    /// parents were pruned has nothing to re-insert against, and
+    /// its precomputed core is the only exact record.)
+    pub fn export_state(&self) -> DagState {
+        let mut blocks: Vec<BlockState> = self
+            .blocks
+            .values()
+            .map(|b| {
+                let g = &self.ghost[&b.id];
+                let a = &self.anc[&b.id];
+                BlockState {
+                    block: b.clone(),
+                    chosen: g.chosen,
+                    mergeset_order: g.mergeset_order.clone(),
+                    accepted: g.accepted.clone(),
+                    rejected: g.rejected.clone(),
+                    blue_score: g.blue_score,
+                    base_blues: g.base_blues.clone(),
+                    base_reds: g.base_reds.clone(),
+                    window: a.window.clone(),
+                    frontier: a.frontier.clone(),
+                }
+            })
+            .collect();
+        blocks.sort_by(|x, y| x.block.round.cmp(&y.block.round).then(x.block.id.cmp(&y.block.id)));
+        let mut seed_rounds: Vec<(BlockId, u64)> = self.seed_rounds.iter().map(|(k, v)| (*k, *v)).collect();
+        seed_rounds.sort();
+        let mut seed_parents: Vec<(BlockId, Vec<BlockId>)> =
+            self.seed_parents.iter().map(|(k, v)| (*k, v.clone())).collect();
+        seed_parents.sort();
+        let mut seed_anc: Vec<(BlockId, Vec<BlockId>, Vec<BlockId>)> = self
+            .seed_anc
+            .iter()
+            .map(|(k, a)| (*k, a.window.clone(), a.frontier.clone()))
+            .collect();
+        seed_anc.sort();
+        let mut pruned_children: Vec<BlockId> = self.pruned_children.iter().copied().collect();
+        pruned_children.sort();
+        DagState { genesis: self.genesis, blocks, seed_rounds, seed_parents, seed_anc, pruned_children }
+    }
+
+    /// Restore a DAG from `export_state` output. No re-insertion:
+    /// every block's core and oracle are carried, so seed blocks
+    /// (whose parents may be absent) restore exactly.
+    pub fn from_state(k: u64, state: DagState) -> Dag {
+        let mut d = Dag::new(k);
+        d.genesis = state.genesis;
+        for bs in state.blocks {
+            let id = bs.block.id;
+            for p in &bs.block.parents {
+                d.children.entry(*p).or_default().push(id);
+            }
+            d.children.entry(id).or_default();
+            d.ghost.insert(
+                id,
+                GhostCore {
+                    chosen: bs.chosen,
+                    mergeset_order: bs.mergeset_order,
+                    accepted: bs.accepted,
+                    rejected: bs.rejected,
+                    blue_score: bs.blue_score,
+                    base_blues: bs.base_blues,
+                    base_reds: bs.base_reds,
+                },
+            );
+            d.anc.insert(id, Anc { window: bs.window, frontier: bs.frontier });
+            d.blocks.insert(id, bs.block);
+        }
+        d.seed_rounds = state.seed_rounds.into_iter().collect();
+        d.seed_parents = state.seed_parents.into_iter().collect();
+        d.seed_anc = state
+            .seed_anc
+            .into_iter()
+            .map(|(id, window, frontier)| (id, Anc { window, frontier }))
+            .collect();
+        d.pruned_children = state.pruned_children.into_iter().collect();
+        d
     }
 
     /// The GHOSTDAG total order over every block in the DAG. A pure

@@ -412,3 +412,56 @@ operations.
   evening entry): the POE_BUNDLE_URL flip back to
   `testnet/bundle.bin` remains outstanding at the time of
   writing.
+
+## Operations log — 2026-11-16: epoch compaction lands (residue stage)
+
+- **Epoch compaction implemented** (README correction 25): at
+  each epoch close the node prunes the finalized history below
+  the closed epoch's first round, anchored at that round's
+  finalized block. `Dag::prune` enforces the three conditions
+  from the 2026-11-15 exactness analysis — pruning point
+  (anchor an ancestor of every tip; prune refuses outright
+  while an unmerged fork tip does not descend from it),
+  reference closure with discharge (mergeset/colour references
+  protect; chosen links are cut into materialized base colour
+  lists; parent links are discharged into seed maps), and
+  seed-aware restore (snapshots carry the full retained state:
+  bundle format `POEBNDL2`, v1 still readable; finstate
+  `POEFIN4`). Gate: `crates/poe-dag/tests/compaction.rs` —
+  fork-heavy mesh in lockstep, compacting vs never, every
+  observable identical; the gate caught two real bugs on the
+  way in (seed-closure scan gap; window round
+  misclassification), both fixed. A poe-finality test pins
+  that the legacy blocks-only restore loses a pruned anchor's
+  whole descendant cone on the same snapshot the state restore
+  keeps exactly.
+- **poe-zk H-binding landed** in the same pass: the fold seed
+  is derived from the node's `H` over the binding kind and the
+  kernel object's bytes (`anchored_seed`), and
+  `verify_anchored` recomputes it — a proof can no longer be
+  re-targeted between objects. The fold stays algebraic; an
+  in-circuit Poseidon2 accumulator remains deliberately
+  unbuilt ahead of the external ZK review.
+- **Full workspace suite: 86/86** (79 workspace + poe-finality
+  7: simnet 2, simnet_skip 3, snapshot_prune 1, simnet_scale 1
+  in release). Logs:
+  `~/workspace/poe-build-2026-11-11/test-logs-2026-11-16/`.
+- **node1 redeployed on the compaction binary (2026-11-16
+  ~10:49 +06), observed:** the unit files had been wiped by a
+  VM replacement again — reinstalled, node2/node3 stopped and
+  disabled as before, the 6500M memory drop-in re-added. First
+  start: the `POEFIN3` finstate was refused by the `POEFIN4`
+  reader and the node fell back to the epoch bundle, exactly
+  as designed — `START synced from bundle at epoch 209 (round
+  3360); ledger epoch 210 minted 300000000399999` — and
+  persisted a `POEFIN4` finstate. Second start: full finstate
+  resume, HOLDing round 3361 in the catch-up dwell, **RSS
+  ~55 MB** at the epoch-209 state. No `PRUNE` line is expected
+  live yet: pruning runs at epoch closes, and no epoch can
+  close until a canonical peer network exists again — the
+  compaction path is verified by the replay gate and the
+  restore tests, not yet by a live close.
+- **Railway is still on the fork lineage**: the POE_BUNDLE_URL
+  flip remains outstanding (dashboard access); this push
+  auto-redeploys Railway onto the compaction binary, but its
+  volume state is unchanged by that.

@@ -485,6 +485,49 @@ kernel and money rules are again untouched:
     and a hand-driven test names exactly the one machine that
     attested a round empty while it was open and also voted for
     the block that round finalized with.
+25. **Epoch compaction (2026-11-16).** At every epoch close the
+    node now tries to drop the finalized history below the
+    closed epoch's first round, so retained DAG memory tracks
+    the live window instead of the whole chain. `Dag::prune`
+    drops only strict ancestors of an anchor block, and only
+    when the anchor is an ancestor of every current tip (the
+    pruning point); while a long-lived fork's tip does not
+    descend from the anchor, pruning refuses and drops nothing
+    — the next epoch's close retries. References from retained
+    blocks into the dropped set are discharged, never left
+    dangling: mergeset/colour references protect their targets
+    (reference closure), a cut chosen link materializes its
+    pre-drop blues/reds into the survivor's stored base lists
+    (so `ghost()` answers stay byte-identical), and parent
+    links are discharged into seed maps — the round, parents,
+    and window/frontier oracle of every pruned block that a
+    survivor still names — so `is_ancestor` keeps answering for
+    pruned ids exactly. Snapshots carry the full retained state
+    including the seeds (`Dag::export_state`/`from_state`, no
+    re-insertion): bundle format `POEBNDL2` (v1 bundles stay
+    readable) and finstate `POEFIN4` (older finstates degrade
+    to the bundle resume, as before). The blocks-only restore
+    path demonstrably cannot do this — a pruned parent makes
+    re-insertion drop the anchor and its whole descendant cone —
+    and a poe-finality test pins both halves of that statement.
+    Gate (`crates/poe-dag/tests/compaction.rs`): a fork-heavy
+    mesh (long-lived fork diverging at round 20, merging at 70)
+    run in lockstep, compacting at every epoch boundary vs
+    never compacting — selected tip, tip sets, per-block blue
+    scores, ghost blues/reds/mergeset order, all-pairs ancestry
+    over every block ever inserted, vote targets, post-prune
+    inserts, and an export/restore round trip all identical.
+    The gate caught two real bugs on the way in, both fixed:
+    the seed-closure scan missed oracles from earlier prunes,
+    and insert's window filter classified pruned ids by the new
+    block's round instead of their own. Also landed with this
+    correction: poe-zk's fold seed is now anchored to the
+    node's `H` (`anchored_seed` / `verify_anchored` in
+    poe-zk) — a proof made for one kernel object no longer
+    verifies for another. The fold itself stays algebraic; an
+    in-circuit Poseidon2 accumulator remains deliberately
+    unbuilt ahead of the external ZK review (see the poe-zk
+    crate docs).
 
 **DAG memory — FIXED (2026-11-15, correction 22).** The finding
 stood at the epoch-209 bundle (33k blocks): ~4.9 GB steady,
@@ -492,17 +535,20 @@ quadratic growth, one node per 8 GB host. The bounded
 representation above replaces it; retained memory is linear
 (419 MB peak replaying 11,991 blocks at testnet width, vs the
 old implementation's quadratic curve). Epoch *compaction* —
-dropping the finalized prefix at epoch closes — is specified
-but deliberately not implemented: the exactness analysis in
-the design record shows the naive form can diverge from a
-never-compacted node on long-lived forks, and the safe form
-(pruning point + reference closure + seed-aware restore) is
-its own gated step.
+dropping the finalized prefix at epoch closes — was specified
+then and landed 2026-11-16 as correction 25, in exactly the
+safe form the exactness analysis demanded (pruning point +
+reference closure + seed-aware restore), gated by the
+compaction replay gate.
 
 Full workspace suite after corrections 1–21: **75/75 tests
 pass** (2026-11-14). Corrections 22–24 (2026-11-15) bring the
 suite to **81/81 tests** — see the 2026-11-15 ops entry
-in `testnet/TESTNET.md`. The liveness mechanism the design was
+in `testnet/TESTNET.md`. Correction 25 (2026-11-16) brings the
+suite to **86/86 tests** (79 workspace + 7 poe-finality,
+including the compaction replay gate, the seed-aware restore
+test, and the anchored-seed test) — see the 2026-11-16 ops
+entry. The liveness mechanism the design was
 missing is implemented in corrections 23–24, testnet profile;
 the two-caps design gap from the Step 10 composition proof
 stands unchanged and is still the authors' decision.
@@ -512,10 +558,12 @@ stands unchanged and is still the authors' decision.
 Step 12d's external audit itself (the audit-ready package is
 written: `AUDIT_PACKAGE.md`; engaging an auditor and setting the
 bounty reward are the owner's steps), Step 12e (mainnet genesis
-ceremony), the Step 5 external ZK security review, phone
-benchmarks, and binding of the proved fold to the node's
-accumulator hash H (VM-CPU prove/verify timings are recorded in
-`crates/poe-zk/BENCHMARKS.md`), and the Step 7 Android/iOS app
+ceremony), the Step 5 external ZK security review and phone
+benchmarks (VM-CPU prove/verify timings are recorded in
+`crates/poe-zk/BENCHMARKS.md`; the fold's seed is H-anchored
+since 2026-11-16 — correction 25 — while an in-circuit
+Poseidon2 accumulator remains open by the reasoning in the
+poe-zk crate docs), and the Step 7 Android/iOS app
 projects (the shell core exists and is verified: `crates/poe-mobile`
 — Rust core tested, Kotlin bindings generated, compile-checked and
 run-checked on the JVM, Swift bindings generated but not compiled

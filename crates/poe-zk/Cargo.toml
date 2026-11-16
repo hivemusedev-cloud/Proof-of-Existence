@@ -18,3 +18,4 @@ p3-symmetric = "0.3"
 p3-keccak = "0.3"
 p3-dft = "0.3"
 rand = { version = "0.9", features = ["small_rng"] }
+poe-crypto = { path = "../poe-crypto" }

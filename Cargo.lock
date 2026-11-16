@@ -2676,6 +2676,7 @@ dependencies = [
  "p3-merkle-tree",
  "p3-symmetric",
  "p3-uni-stark",
+ "poe-crypto",
  "rand 0.9.5",
 ]
 

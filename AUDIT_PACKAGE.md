@@ -165,6 +165,24 @@ the operator, fixed 2026-11-14 with regression tests:
     lagging local record). Fixed: an attestation counted after
     its round finalized is inert — neither tallied nor recorded
     (README correction 24).
+11. **Unbounded retained history (fixed 2026-11-16).** Even
+    with the bounded per-block representation (finding 9), the
+    DAG retained every block since genesis, so memory still
+    grew with chain length. Fixed: epoch compaction under a
+    pruning-point + reference-closure rule with seed-aware
+    snapshot/bundle restore (README correction 25), gated by a
+    lockstep compaction replay gate on fork-heavy shapes. The
+    gate caught two implementation bugs before they shipped
+    (a seed-closure scan gap and a window round
+    misclassification) — both are documented in correction 25;
+    an auditor should re-derive the discharge rules (chosen
+    links cut into materialized base colour lists, parent links
+    discharged into seed maps) from `Dag::prune` rather than
+    trusting this summary. Also closed in the same pass: the
+    ZK fold's seed is now anchored to the node's `H`, so a
+    binding proof cannot be re-targeted between kernel objects;
+    the fold itself remains algebraic pending the external ZK
+    review (see "What is NOT claimed").
 
 An auditor should re-derive each of these from the code and the
 issue history rather than trusting this summary, and should look
