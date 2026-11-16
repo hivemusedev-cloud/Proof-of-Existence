@@ -1,0 +1,1 @@
+{"description":"PoE suite desktop shell (PoE OS Phase 1, app-mode): an Electron shell over the poe-node service, talking to it only through its local control endpoint.","devDependencies":{"electron":"^33.2.0"},"main":"main.js","name":"poe-suite","private":true,"scripts":{"smoke":"POE_APP_SMOKE=1 electron .","start":"electron ."},"version":"0.1.0"}

@@ -244,7 +244,12 @@ of it waiting.
   (`poe-node service-unit`), and the lifecycle contract
   (first-run bundle sync, readiness = the control endpoint
   answers `status`, restart = the node's own resume order).
-  The shell itself awaits the owners' technology decision.
+  The shell is **Electron** (the owner's decision,
+  2026-11-16, over the Tauri recommendation) and its v1 is
+  built in `app/`: it supervises the node service (or adopts
+  a running one), and renders Overview / Wallet / Swap &
+  Bridge / Node views over the control endpoint — verified by
+  a headless smoke against a fresh node (see `app/README.md`).
 
 ## Step 12 — genesis, devnet, and the public testnet (12c, live)
 

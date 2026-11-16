@@ -16,7 +16,7 @@ it does not redefine them.
 | Key custody | `KeyVault` backends: file stub; OS keyring (Secret Service) via `POE_VAULT` | exists (Phase 0 item 2, Phase 1) |
 | Data-dir resolution | `poe-node paths` | exists (this phase) |
 | Service definition | `poe-node service-unit` (systemd user unit, Linux) | exists (this phase) |
-| Shell | The desktop UI over the control endpoint | **not started — owner's technology decision pending** |
+| Shell | The desktop UI over the control endpoint — **Electron** (owner's decision, 2026-11-16, over the Tauri recommendation, for the control it gives) | v1 built in `app/` — supervision, adoption, all control verbs wired; headless smoke verified |
 | Installers / signing | Per-OS packages and signed binaries | later in Phase 1 |
 
 ## Data directory

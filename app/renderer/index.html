@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PoE Suite</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <aside>
+    <div class="brand">PoE&nbsp;Suite</div>
+    <nav>
+      <button data-view="overview" class="active">Overview</button>
+      <button data-view="wallet">Wallet</button>
+      <button data-view="swap">Swap &amp; Bridge</button>
+      <button data-view="node">Node</button>
+    </nav>
+    <div class="statebox">
+      <div class="label">Node service</div>
+      <div id="state-pill" class="pill stopped">stopped</div>
+      <div id="state-note" class="note"></div>
+    </div>
+  </aside>
+
+  <main>
+    <section id="view-overview" class="view active">
+      <h1>Overview</h1>
+      <div id="overview-grid" class="grid"></div>
+      <p id="overview-msg" class="msg"></p>
+    </section>
+
+    <section id="view-wallet" class="view">
+      <h1>Wallet</h1>
+      <h2>Live notes</h2>
+      <div id="notes"></div>
+      <h2>Existence Containers</h2>
+      <div id="containers"></div>
+      <div class="row">
+        <button id="import-btn">Import container (.poec)…</button>
+        <span id="import-msg" class="msg"></span>
+      </div>
+      <h2>Offline show</h2>
+      <form id="show-form" class="form">
+        <label>Coin <input name="coin" type="number" required></label>
+        <label>Challenge <input name="challenge" type="number" required></label>
+        <label>Counterparty <input name="counterparty" type="number" value="0"></label>
+        <button type="submit">Perform show</button>
+      </form>
+      <p id="show-msg" class="msg"></p>
+      <h2>Transfer (advanced)</h2>
+      <p class="note">Notes are bearer instruments and there is no note-addressing
+      convention yet, so a transfer is given as complete note marks — the exact
+      JSON the control surface validates against the ledger before queueing.</p>
+      <form id="transfer-form" class="form col">
+        <label>Inputs (JSON array of notes) <textarea name="ins" rows="3"></textarea></label>
+        <label>Outputs (JSON array of notes) <textarea name="outs" rows="3"></textarea></label>
+        <button type="submit">Queue transfer</button>
+      </form>
+      <p id="transfer-msg" class="msg"></p>
+    </section>
+
+    <section id="view-swap" class="view">
+      <h1>Swap &amp; Bridge</h1>
+      <div id="v2-grid" class="grid"></div>
+      <h2>Quote</h2>
+      <form id="quote-form" class="form">
+        <label>Side
+          <select name="side"><option value="buy">buy</option><option value="sell">sell</option></select>
+        </label>
+        <label>Amount <input name="amount" type="text" value="1000000000000000000" required></label>
+        <button type="submit">Get quote</button>
+      </form>
+      <p id="quote-msg" class="msg"></p>
+      <h2>Execute</h2>
+      <div class="row">
+        <button id="swap-btn">Swap</button>
+        <button id="bridge-btn">Bridge</button>
+      </div>
+      <p id="exec-msg" class="msg"></p>
+    </section>
+
+    <section id="view-node" class="view">
+      <h1>Node</h1>
+      <div id="node-grid" class="grid"></div>
+      <div class="row">
+        <button id="start-btn">Start node</button>
+        <button id="stop-btn">Stop node</button>
+        <span class="note">Stop only affects a node this shell started; an adopted node is left running.</span>
+      </div>
+      <h2>Service log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+<script src="app.js"></script>
+</body>
+</html>
