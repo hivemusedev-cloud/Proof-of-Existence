@@ -521,3 +521,39 @@ note, value 100000 (the current window's grant).
 gated refusal. No epoch can close until a canonical peer
 network exists, so the transfer queue's live drain is
 verified by unit test, not yet by a live proposal.
+
+## Operations log — 2026-11-16 (Phase 1): OS-keyring vault backend + app packaging
+
+Phase 1 (desktop app-mode) opened with its shell-independent
+work; the shell itself awaits the owners' technology decision
+(Stage 4 AskAdmin item 4a). poe-vault gains a second backend:
+the OS keyring (freedesktop Secret Service), selected with
+POE_VAULT=keyring. poe-crypto's XMSS key gained the state-bytes
+seam (state_bytes / from_state_bytes / sign_persistent_with)
+the backend signs through — persist-before-release now runs
+through the keyring store. Two findings from the work, both
+recorded in the code: (1) the keyring's blocking D-Bus
+transport panics inside the node's tokio runtime ("Cannot
+start a runtime from within a runtime"), so the node uses
+ThreadedKeyringVault — custody on a dedicated thread, trait
+calls as channel round-trips — and the vault battery carries
+a regression test that drives it from inside a runtime;
+(2) no commodity OS store signs ML-DSA/XMSS internally, so
+the keyring backend is encrypted-at-rest custody, honestly
+not mainnet-eligible, like the stub. App packaging:
+APP_PACKAGING.md + `poe-node paths` / `poe-node service-unit`
+(per-OS data dirs, control-endpoint names, lifecycle
+contract). Full suite 98/98 (91 workspace + 7 poe-finality;
+logs test-logs-2026-11-16/*-phase1.log).
+
+Verified live, on a scratch node (removed afterwards): a
+fresh node with POE_VAULT=keyring created its identity in a
+real GNOME Keyring (home-installed on this VM, which ships
+without one), synced from the epoch-209 bundle, ran rounds,
+and exited cleanly; a second start resumed from its POEFIN4
+finstate with the same machine id and answered `ctl status`
+with keys_backend "OS keyring (Secret Service)". node1
+redeployed on the same binary, file backend as before:
+machine unchanged, POEFIN4 resume, HOLDing round 3361.
+Railway remains on its fork lineage pending the bundle-URL
+flip (owner's dashboard action, unchanged).

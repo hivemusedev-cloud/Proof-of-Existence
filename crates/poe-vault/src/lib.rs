@@ -21,17 +21,27 @@
 //! * the **ticket chain** — the reveal chain whose commitment is
 //!   registered at join; reveals are deterministic reads.
 //!
-//! The one backend implemented here, [`FileVault`], is the
-//! **software stub**: it stores the keys in the node's data
-//! directory in the exact formats the node has always used
-//! (`device.key` as two hex lines, `ticket.seed` as 32 raw bytes,
-//! `xmss.key` in the `POEXMSS1` state format), so existing node
-//! directories — and their machine identities — carry over
-//! unchanged. A stub is for development and testnet only:
-//! [`KeyVault::mainnet_eligible`] returns `false` for it, and a
-//! mainnet-profile build must refuse to run on a backend that is
-//! not eligible. Hardware and OS-vault backends implement the
-//! same trait in later phases without callers changing.
+//! Two backends are implemented. [`FileVault`] is the **software
+//! stub**: it stores the keys in the node's data directory in the
+//! exact formats the node has always used (`device.key` as two
+//! hex lines, `ticket.seed` as 32 raw bytes, `xmss.key` in the
+//! `POEXMSS1` state format), so existing node directories — and
+//! their machine identities — carry over unchanged.
+//! [`KeyringVault`] (feature `os-keyring`, Phase 1) stores the
+//! same three secrets in the desktop's own key store — the
+//! freedesktop Secret Service (GNOME Keyring / KWallet) — so the
+//! material is encrypted at rest under the user's login instead
+//! of sitting as plaintext files. Both are development/testnet
+//! custody: [`KeyVault::mainnet_eligible`] returns `false` for
+//! each, and a mainnet-profile build must refuse to run on a
+//! backend that is not eligible. The honest limit, stated here
+//! rather than discovered later: no commodity OS store performs
+//! ML-DSA or XMSS signing internally, so with either backend the
+//! key material enters process memory at sign time; the keyring
+//! improves custody *at rest*, it is not hardware custody.
+//! Hardware backends (an ATECC608-class chip on a standalone rig,
+//! StrongBox-class stores) implement the same trait in later
+//! phases without callers changing.
 //!
 //! Scope note, stated plainly: the libp2p **peer transport key**
 //! (`peer.key`) is *not* behind this interface yet. It is a
@@ -54,6 +64,11 @@ use poe_identity::device_id;
 use rand::rngs::ThreadRng;
 use rand::RngCore;
 
+#[cfg(feature = "os-keyring")]
+pub mod keyring;
+#[cfg(feature = "os-keyring")]
+pub use keyring::{KeyringVault, ThreadedKeyringVault};
+
 /// Everything that can go wrong between a caller and its keys.
 #[derive(Debug)]
 pub enum VaultError {
@@ -62,6 +77,11 @@ pub enum VaultError {
     /// public half.
     BadDeviceKey,
     Xmss(XmssError),
+    /// A platform key store (OS keyring) is unavailable, locked, or
+    /// refused an operation. Backends never fall back silently on
+    /// this error — custody downgrades are an operator's explicit
+    /// choice, never a library's.
+    Store(String),
 }
 
 impl fmt::Display for VaultError {
@@ -70,6 +90,7 @@ impl fmt::Display for VaultError {
             VaultError::Io(e) => write!(f, "vault io: {e}"),
             VaultError::BadDeviceKey => write!(f, "stored device key does not parse"),
             VaultError::Xmss(e) => write!(f, "vault xmss: {e:?}"),
+            VaultError::Store(msg) => write!(f, "vault key store: {msg}"),
         }
     }
 }
@@ -239,7 +260,7 @@ impl KeyVault for FileVault {
 
 // -- hex (the device.key file format) -----------------------------------------
 
-fn hex_encode(bytes: &[u8]) -> String {
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push_str(&format!("{b:02x}"));
@@ -247,7 +268,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn hex_decode(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }

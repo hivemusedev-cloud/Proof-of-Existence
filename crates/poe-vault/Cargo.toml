@@ -2,9 +2,20 @@
 name = "poe-vault"
 version = "0.1.0"
 edition = "2021"
-description = "PoE key custody: the KeyVault interface (PoE OS flag 1) and its file/software-stub backend. Signing keys are used through the interface, never handled as raw material by callers."
+description = "PoE key custody: the KeyVault interface (PoE OS flag 1) and its backends — the file software stub and the OS keyring (Secret Service). Signing keys are used through the interface, never handled as raw material by callers."
+
+[features]
+# The OS-keyring backend (Linux Secret Service today; the same
+# custody shape the other desktops' stores fill in Phase 1).
+os-keyring = ["dep:secret-service"]
 
 [dependencies]
 poe-crypto = { path = "../poe-crypto" }
 poe-identity = { path = "../poe-identity" }
 rand = "0.8"
+secret-service = { version = "4", optional = true, default-features = false, features = ["rt-tokio-crypto-rust"] }
+
+[dev-dependencies]
+# The keyring battery's regression test drives the threaded
+# backend from inside a tokio runtime, as poe-node does.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

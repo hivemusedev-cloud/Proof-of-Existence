@@ -36,7 +36,7 @@ use poe_kernel::{Spend, COIN};
 use poe_net::{NetNode, TOPIC_ACTS, TOPIC_BLOCKS, TOPIC_VOTES};
 use poe_store::encode::{decode_op, encode_ledger, encode_op, Reader};
 use poe_store::Store;
-use poe_vault::{FileVault, KeyVault};
+use poe_vault::{FileVault, KeyVault, ThreadedKeyringVault};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -1416,9 +1416,41 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     let mut rng = rand::thread_rng();
     let dir = args.dir.clone();
     std::fs::create_dir_all(&dir)?;
-    let keys: Box<dyn KeyVault> = Box::new(
-        FileVault::load_or_create(&dir, &mut rng, CHAIN_LEN, XMSS_HEIGHT).map_err(io::Error::other)?,
-    );
+    // Key custody backend (PoE OS flag 1): the file stub by
+    // default; POE_VAULT=keyring selects the OS keyring, with the
+    // vault named after the node directory. The choice is
+    // explicit and logged, and a keyring failure is fatal — the
+    // node never downgrades custody silently. A keyring vault is
+    // a DIFFERENT identity from the same directory's file keys
+    // (its secrets live in the keyring, not in device.key), so
+    // switching backends is an operator's migration decision,
+    // not a runtime detail.
+    let keys: Box<dyn KeyVault> = match std::env::var("POE_VAULT").as_deref() {
+        Ok("keyring") => {
+            let vault_id = dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "node".to_string());
+            // The threaded front-end: this node runs inside a
+            // tokio runtime, and the keyring's blocking D-Bus
+            // transport cannot start its own runtime there (it
+            // panics) — custody lives on the vault's own thread.
+            Box::new(
+                ThreadedKeyringVault::load_or_create(&vault_id, CHAIN_LEN, XMSS_HEIGHT)
+                    .map_err(io::Error::other)?,
+            )
+        }
+        Ok("file") | Err(_) => Box::new(
+            FileVault::load_or_create(&dir, &mut rng, CHAIN_LEN, XMSS_HEIGHT)
+                .map_err(io::Error::other)?,
+        ),
+        Ok(other) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown POE_VAULT backend '{other}' (expected 'file' or 'keyring')"),
+            ));
+        }
+    };
     println!("KEYS backend={} mainnet_eligible={}", keys.backend_name(), keys.mainnet_eligible());
     let machine = keys.machine();
 

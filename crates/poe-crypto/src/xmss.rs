@@ -200,20 +200,77 @@ impl XmssKey {
         Ok(self.sign_at(leaf, msg))
     }
 
-    // -- state file ---------------------------------------------------------
-    // Layout: magic "POEXMSS1" | height u32 BE | next u64 BE | seed | root.
+    /// Sign with the state discipline, persisting through a caller-
+    /// supplied store instead of a file: the leaf is reserved in
+    /// memory, the advanced state bytes are handed to `persist`
+    /// (which must durably store them before returning `Ok`), and
+    /// only then is the signature produced. This is the seam vault
+    /// backends whose state does not live in a file (an OS keyring,
+    /// a secure element) sign through — the discipline is identical
+    /// to [`XmssKey::sign_persistent`]: a crash or a failed store
+    /// can burn a leaf, never reuse one.
+    pub fn sign_persistent_with(
+        &mut self,
+        persist: &mut dyn FnMut(&[u8]) -> Result<(), XmssError>,
+        msg: &[u8],
+    ) -> Result<XmssSignature, XmssError> {
+        if self.next >= self.capacity() {
+            return Err(XmssError::Exhausted);
+        }
+        let leaf = self.next;
+        self.next += 1;
+        if let Err(e) = persist(&self.state_bytes()) {
+            // The in-memory index has advanced but nothing was
+            // signed; the caller's stored state still holds the
+            // pre-advance index. Rolling back is safe here (no
+            // signature exists for this leaf) and keeps the
+            // in-memory and stored states in step for a retry.
+            self.next -= 1;
+            return Err(e);
+        }
+        Ok(self.sign_at(leaf, msg))
+    }
 
-    /// Persist the state atomically: write a temp file, fsync it, rename
-    /// over the old state. A crash mid-save leaves either the old or the
-    /// new state, never a torn one — and since the index only ever moves
-    /// forward before a signature exists, both are safe.
-    pub fn save(&self, path: &Path) -> Result<(), XmssError> {
+    // -- state serialization --------------------------------------------------
+    // Layout: magic "POEXMSS1" | height u32 BE | next u64 BE | seed | root.
+    // The state file is exactly these 84 bytes; vault backends that
+    // store the state elsewhere carry the same bytes.
+
+    /// The full state as the canonical 84 `POEXMSS1` bytes.
+    pub fn state_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(84);
         buf.extend_from_slice(b"POEXMSS1");
         buf.extend_from_slice(&self.height.to_be_bytes());
         buf.extend_from_slice(&self.next.to_be_bytes());
         buf.extend_from_slice(&self.seed);
         buf.extend_from_slice(&self.root());
+        buf
+    }
+
+    /// Rebuild a key from state bytes. The stored root is recomputed
+    /// from the seed and checked — a state that does not match its
+    /// root is refused, not trusted.
+    pub fn from_state_bytes(buf: &[u8]) -> Result<XmssKey, XmssError> {
+        if buf.len() != 84 || &buf[..8] != b"POEXMSS1" {
+            return Err(XmssError::BadState);
+        }
+        let height = u32::from_be_bytes(buf[8..12].try_into().map_err(|_| XmssError::BadState)?);
+        let next = u64::from_be_bytes(buf[12..20].try_into().map_err(|_| XmssError::BadState)?);
+        let seed: [u8; 32] = buf[20..52].try_into().map_err(|_| XmssError::BadState)?;
+        let root: [u8; 32] = buf[52..84].try_into().map_err(|_| XmssError::BadState)?;
+        let key = XmssKey::generate(seed, height);
+        if key.root() != root || next > key.capacity() {
+            return Err(XmssError::BadState);
+        }
+        Ok(XmssKey { next, ..key })
+    }
+
+    /// Persist the state atomically: write a temp file, fsync it, rename
+    /// over the old state. A crash mid-save leaves either the old or the
+    /// new state, never a torn one — and since the index only ever moves
+    /// forward before a signature exists, both are safe.
+    pub fn save(&self, path: &Path) -> Result<(), XmssError> {
+        let buf = self.state_bytes();
         let mut tmp: PathBuf = path.to_path_buf();
         tmp.set_extension("tmp");
         // Write + fsync on the SAME writable handle. (Opening the file
@@ -228,23 +285,10 @@ impl XmssKey {
         Ok(())
     }
 
-    /// Load a key from its state file. The stored root is recomputed from
-    /// the seed and checked — a state that does not match its root is
-    /// refused, not trusted.
+    /// Load a key from its state file (the `POEXMSS1` bytes on disk).
     pub fn load(path: &Path) -> Result<XmssKey, XmssError> {
         let buf = fs::read(path)?;
-        if buf.len() != 84 || &buf[..8] != b"POEXMSS1" {
-            return Err(XmssError::BadState);
-        }
-        let height = u32::from_be_bytes(buf[8..12].try_into().map_err(|_| XmssError::BadState)?);
-        let next = u64::from_be_bytes(buf[12..20].try_into().map_err(|_| XmssError::BadState)?);
-        let seed: [u8; 32] = buf[20..52].try_into().map_err(|_| XmssError::BadState)?;
-        let root: [u8; 32] = buf[52..84].try_into().map_err(|_| XmssError::BadState)?;
-        let key = XmssKey::generate(seed, height);
-        if key.root() != root || next > key.capacity() {
-            return Err(XmssError::BadState);
-        }
-        Ok(XmssKey { next, ..key })
+        Self::from_state_bytes(&buf)
     }
 }
 

@@ -8,6 +8,7 @@
 //! built from its frozen spec, attested devices bound, a week of acts
 //! persisted through poe-store, a close, a restart, and a replay check.
 
+mod appenv;
 mod control;
 mod genesis;
 mod testnet;
@@ -52,6 +53,34 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        return;
+    }
+    if args.len() > 1 && args[1] == "paths" {
+        // The app-mode environment (Phase 1): where an installer
+        // or shell puts the suite's data, and where the node's
+        // control endpoint will be. --dir reports for a specific
+        // directory instead of the platform default.
+        let dir = args
+            .iter()
+            .position(|a| a == "--dir")
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(appenv::data_dir);
+        println!("data_dir={}", dir.display());
+        println!("control_endpoint={}", appenv::control_endpoint(&dir));
+        return;
+    }
+    if args.len() > 1 && args[1] == "service-unit" {
+        // Print the systemd user unit for the app-mode service
+        // (see appenv::systemd_user_unit). --dir as in `paths`.
+        let dir = args
+            .iter()
+            .position(|a| a == "--dir")
+            .and_then(|i| args.get(i + 1))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(appenv::data_dir);
+        let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("poe-node"));
+        print!("{}", appenv::systemd_user_unit(&exe, &dir));
         return;
     }
     if args.len() > 1 && args[1] == "testnet" {

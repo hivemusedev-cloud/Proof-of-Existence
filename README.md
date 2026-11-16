@@ -189,20 +189,29 @@ of it waiting.
   against it, with the triaxial audit in protocol shape
   (Sealed/Broken/Open). The seed's full claim-vs-denial determinant
   formalism is not ported (stated in the crate docs).
-- `crates/poe-vault` (PoE OS device build, Phase 0 item 2, 5/5
-  tests) — key custody behind one interface (the OS model's
-  flag 1): the `KeyVault` trait over the node's three protocol
-  key families (device ML-DSA, stateful XMSS vote key, ticket
-  chain), with signing done by the vault — a leaf index is
-  persisted before its signature is released, and no caller
-  handles secret material. The one backend is `FileVault`, the
-  software stub: it keeps the exact key files the node has
-  always used (`device.key`, `ticket.seed`, `xmss.key`), so
-  existing identities carry over unchanged, and it reports
-  itself not mainnet-eligible. The testnet node now loads and
-  signs exclusively through this interface. OS-vault and
-  secure-element backends implement the same trait in the
-  device phases. Stated scope: the libp2p peer transport key is
+- `crates/poe-vault` (PoE OS device build, Phase 0 item 2;
+  OS-keyring backend added in Phase 1, 6/6 tests) — key custody
+  behind one interface (the OS model's flag 1): the `KeyVault`
+  trait over the node's three protocol key families (device
+  ML-DSA, stateful XMSS vote key, ticket chain), with signing
+  done by the vault — a leaf index is persisted before its
+  signature is released, and no caller handles secret material.
+  Two backends. `FileVault`, the software stub: it keeps the
+  exact key files the node has always used (`device.key`,
+  `ticket.seed`, `xmss.key`), so existing identities carry over
+  unchanged. `KeyringVault` (Phase 1): the same three secrets
+  in the desktop's own key store (freedesktop Secret Service),
+  encrypted at rest under the user's login; the node selects
+  it with `POE_VAULT=keyring` and uses the threaded front-end
+  (`ThreadedKeyringVault`) because the keyring's blocking
+  transport cannot run inside the node's async runtime — the
+  battery includes that regression test, run against a live
+  keyring. Both backends report themselves not
+  mainnet-eligible: no commodity OS store signs ML-DSA/XMSS
+  internally, so the keyring removes plaintext-at-rest, not
+  memory exposure (the crate docs state this plainly). The
+  testnet node loads and signs exclusively through this
+  interface. Stated scope: the libp2p peer transport key is
   not behind the interface yet (see the crate docs).
 - The local control surface (PoE OS device build, Phase 0
   item 3) — `crates/poe-node/src/control.rs`, with the
@@ -223,6 +232,19 @@ of it waiting.
   take complete note marks: the ledger's notes are bearer
   instruments and no note-addressing convention exists yet;
   none was invented for this wiring.
+- App-mode packaging (PoE OS Phase 1, shell-independent) —
+  `crates/poe-node/src/appenv.rs` plus `APP_PACKAGING.md`: the
+  conventions a desktop shell builds against instead of
+  inventing. Per-OS data-directory resolution (`poe-node
+  paths`: XDG on Linux, Application Support on macOS, local
+  app data on Windows; `POE_DIR` override), the control
+  endpoint's name on each platform (the Windows named-pipe
+  name is fixed now, its server is shell-stage work), a
+  generated systemd user unit for the suite's service
+  (`poe-node service-unit`), and the lifecycle contract
+  (first-run bundle sync, readiness = the control endpoint
+  answers `status`, restart = the node's own resume order).
+  The shell itself awaits the owners' technology decision.
 
 ## Step 12 — genesis, devnet, and the public testnet (12c, live)
 
@@ -592,7 +614,10 @@ see the `crates/poe-vault` inventory entry above) brings the
 suite to **91/91 tests** (84 workspace + 7 poe-finality).
 Phase 0 item 3 (2026-11-16, the local control surface — see
 the inventory entry above) brings it to **94/94 tests**
-(87 workspace + 7 poe-finality).
+(87 workspace + 7 poe-finality). Phase 1's shell-independent
+work (2026-11-16, the OS-keyring vault backend and the
+app-packaging conventions — see the inventory entries above)
+brings it to **98/98 tests** (91 workspace + 7 poe-finality).
 
 ## Residue (not done, not claimed)
 
