@@ -2633,6 +2633,7 @@ dependencies = [
  "poe-kernel",
  "poe-net",
  "poe-store",
+ "poe-vault",
  "rand 0.8.8",
  "tokio",
 ]
@@ -2651,6 +2652,15 @@ version = "0.1.0"
 dependencies = [
  "poe-crypto",
  "poe-kernel",
+]
+
+[[package]]
+name = "poe-vault"
+version = "0.1.0"
+dependencies = [
+ "poe-crypto",
+ "poe-identity",
+ "rand 0.8.8",
 ]
 
 [[package]]

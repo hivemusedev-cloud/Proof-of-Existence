@@ -22,10 +22,8 @@
 //! except the shape.
 
 use crate::genesis::{build_genesis, GenesisSpec, RootSpec};
-use poe_crypto::hash::{h, h_u64, Part, H512};
+use poe_crypto::hash::{h_u64, Part, H512};
 use poe_crypto::pq::DsaKeypair;
-use poe_crypto::tickets::TicketChain;
-use poe_crypto::xmss::XmssKey;
 use poe_dag::{decode_block, encode_block, Block, BlockState, DagState};
 use poe_epoch::{EpochEngine, Launch, Profile};
 use poe_finality::{
@@ -38,6 +36,7 @@ use poe_kernel::{Spend, COIN};
 use poe_net::{NetNode, TOPIC_ACTS, TOPIC_BLOCKS, TOPIC_VOTES};
 use poe_store::encode::{decode_op, encode_ledger, encode_op, Reader};
 use poe_store::Store;
+use poe_vault::{FileVault, KeyVault};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -166,62 +165,14 @@ fn now_unix() -> u64 {
 }
 
 // -- node identity ------------------------------------------------------------
-
-struct Keys {
-    device: DsaKeypair,
-    machine: u64,
-    chain: TicketChain,
-    xmss: XmssKey,
-    xmss_path: PathBuf,
-}
-
-fn load_or_create_keys(dir: &Path, rng: &mut rand::rngs::ThreadRng) -> io::Result<Keys> {
-    std::fs::create_dir_all(dir)?;
-    let dev_path = dir.join("device.key");
-    let device = if dev_path.exists() {
-        let text = std::fs::read_to_string(&dev_path)?;
-        let mut lines = text.lines();
-        let pk = hex_decode(lines.next().unwrap_or(""))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "device.key pk"))?;
-        let sk = hex_decode(lines.next().unwrap_or(""))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "device.key sk"))?;
-        DsaKeypair::from_key_bytes(&pk, &sk)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "device.key does not parse"))?
-    } else {
-        let kp = DsaKeypair::generate(rng);
-        std::fs::write(
-            &dev_path,
-            format!("{}\n{}\n", hex_encode(&kp.public_key_bytes()), hex_encode(&kp.secret_key_bytes())),
-        )?;
-        kp
-    };
-    let machine = device_id(&device.public_key_bytes());
-
-    let chain_path = dir.join("ticket.seed");
-    let chain = if chain_path.exists() {
-        let seed = std::fs::read(&chain_path)?;
-        TicketChain::new(&seed, CHAIN_LEN)
-    } else {
-        let mut seed = vec![0u8; 32];
-        use rand::RngCore;
-        rng.fill_bytes(&mut seed);
-        std::fs::write(&chain_path, &seed)?;
-        TicketChain::new(&seed, CHAIN_LEN)
-    };
-
-    let xmss_path = dir.join("xmss.key");
-    let xmss = if xmss_path.exists() {
-        XmssKey::load(&xmss_path).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("xmss load: {e:?}")))?
-    } else {
-        let mut seed = [0u8; 32];
-        use rand::RngCore;
-        rng.fill_bytes(&mut seed);
-        let key = XmssKey::generate(seed, XMSS_HEIGHT);
-        key.save(&xmss_path).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("xmss save: {e:?}")))?;
-        key
-    };
-    Ok(Keys { device, machine, chain, xmss, xmss_path })
-}
+//
+// The node's protocol keys (device ML-DSA, XMSS vote key, ticket
+// chain) live behind the KeyVault interface in poe-vault (PoE OS
+// flag 1, Phase 0 item 2, 2026-11-16). This node runs on the
+// FileVault backend, which keeps the exact key files this
+// directory has always used, so existing identities carry over.
+// The libp2p peer transport key below is not part of the vault
+// yet — see the poe-vault crate docs for the stated scope.
 
 fn load_or_create_peer_key(dir: &Path) -> io::Result<libp2p::identity::Keypair> {
     let path = dir.join("peer.key");
@@ -1058,7 +1009,7 @@ struct Node {
     peer_addrs: Vec<libp2p::Multiaddr>,
     /// Last peer re-dial inside pump_until (see there).
     last_redial_ms: u128,
-    keys: Keys,
+    keys: Box<dyn KeyVault>,
     my_announcement: Announcement,
     announcements: BTreeMap<u64, Announcement>,
     pending_ann: Vec<Announcement>,
@@ -1452,8 +1403,11 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     let mut rng = rand::thread_rng();
     let dir = args.dir.clone();
     std::fs::create_dir_all(&dir)?;
-    let keys = load_or_create_keys(&dir, &mut rng)?;
-    let machine = keys.machine;
+    let keys: Box<dyn KeyVault> = Box::new(
+        FileVault::load_or_create(&dir, &mut rng, CHAIN_LEN, XMSS_HEIGHT).map_err(io::Error::other)?,
+    );
+    println!("KEYS backend={} mainnet_eligible={}", keys.backend_name(), keys.mainnet_eligible());
+    let machine = keys.machine();
 
     // Self-attestation under the (public) testnet root.
     let root_sk = hex_decode(ROOT_SK_HEX)
@@ -1463,7 +1417,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     let att = Attestation::issue(
         &root,
         &mut rng,
-        keys.device.public_key_bytes(),
+        keys.device_public_key(),
         spec.root_id,
         machine,
         1_000_000,
@@ -1474,9 +1428,9 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         serial: att.serial,
         expiry_epoch: att.expiry_epoch,
         root_signature: att.signature.clone(),
-        xmss_root: keys.xmss.root(),
+        xmss_root: keys.xmss_root(),
         xmss_height: XMSS_HEIGHT,
-        chain_commitment: keys.chain.commitment(),
+        chain_commitment: keys.chain_commitment(),
         sync_hint: 0,
     };
 
@@ -1651,13 +1605,13 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         let mine = node.fin.canonical_votes(machine);
         for (round, block) in mine {
             if round >= node.next_apply && !node.fin.finalized.contains_key(&round) {
-                if let Ok(sig) = node.keys.xmss.sign_persistent(&node.keys.xmss_path, &block) {
+                if let Ok(sig) = node.keys.sign_xmss(&block) {
                     // Re-cast carries the attestation too, under the
                     // same rule as a fresh cast: the attested round is
                     // still unfinalized in this node's record.
                     let skip = if round >= 1 && !node.fin.finalized.contains_key(&(round - 1)) {
                         let msg = poe_finality::skip_message(round - 1);
-                        node.keys.xmss.sign_persistent(&node.keys.xmss_path, &msg).ok()
+                        node.keys.sign_xmss(&msg).ok()
                     } else {
                         None
                     };
@@ -1701,11 +1655,11 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
             // "previous round"), like every later round's during its
             // predecessor.
             if 1 < CHAIN_LEN {
-                let link = node.keys.chain.reveal(1);
-                let _ = node.fin.submit_reveal(node.keys.machine, 0, link);
+                let link = node.keys.chain_reveal(1);
+                let _ = node.fin.submit_reveal(node.keys.machine(), 0, link);
                 let _ = node
                     .net
-                    .publish(TOPIC_BLOCKS, reveal_msg(node.keys.machine, 0, &link, now));
+                    .publish(TOPIC_BLOCKS, reveal_msg(node.keys.machine(), 0, &link, now));
             }
             // Cap the wait pump at t0 itself: overshooting the
             // boundary used to make a node enter the round loop a
@@ -1727,7 +1681,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         }
         let round = next_round;
         next_round += 1;
-        node.process_round(round, &dir, &mut rng).await?;
+        node.process_round(round, &dir).await?;
         rounds_done += 1;
         if args.run_rounds > 0 && rounds_done >= args.run_rounds {
             println!(
@@ -1809,15 +1763,10 @@ impl Node {
             .filter(|b| b.round == round)
             .map(|b| b.machine)
             .collect();
-        has_peer_material(self.keys.machine, &reveals, &blocks)
+        has_peer_material(self.keys.machine(), &reveals, &blocks)
     }
 
-    async fn process_round(
-        &mut self,
-        round: u64,
-        dir: &Path,
-        rng: &mut rand::rngs::ThreadRng,
-    ) -> io::Result<()> {
+    async fn process_round(&mut self, round: u64, dir: &Path) -> io::Result<()> {
         let rpe = self.spec.rounds_per_epoch;
         let epoch = round / rpe;
         // Keep configured peers connected (see peer_addrs).
@@ -1894,11 +1843,11 @@ impl Node {
             // votes, then a short pump so peers' last pushes reach me,
             // and a final flush before the committee is sampled.
             if (round as usize) + 1 < CHAIN_LEN {
-                let link = self.keys.chain.reveal((round + 1) as usize);
-                let _ = self.fin.submit_reveal(self.keys.machine, round, link);
+                let link = self.keys.chain_reveal((round + 1) as usize);
+                let _ = self.fin.submit_reveal(self.keys.machine(), round, link);
                 let _ = self
                     .net
-                    .publish(TOPIC_BLOCKS, reveal_msg(self.keys.machine, round, &link, round));
+                    .publish(TOPIC_BLOCKS, reveal_msg(self.keys.machine(), round, &link, round));
             }
             self.pump_until(start_ms + 300).await;
             self.flush_reveals();
@@ -1960,11 +1909,11 @@ impl Node {
                             // I close only once a peer's material
                             // joins mine.
                             if (round as usize) + 1 < CHAIN_LEN {
-                                let link = self.keys.chain.reveal((round + 1) as usize);
-                                let _ = self.fin.submit_reveal(self.keys.machine, round, link);
+                                let link = self.keys.chain_reveal((round + 1) as usize);
+                                let _ = self.fin.submit_reveal(self.keys.machine(), round, link);
                                 let _ = self.net.publish(
                                     TOPIC_BLOCKS,
-                                    reveal_msg(self.keys.machine, round, &link, round),
+                                    reveal_msg(self.keys.machine(), round, &link, round),
                                 );
                             }
                             println!(
@@ -1994,13 +1943,13 @@ impl Node {
                     // forever, each sitting on the material the
                     // other needs.
                     if now_ms >= last_repush + 5_000
-                        && self.fin.reveal_of(self.keys.machine, round).is_some()
+                        && self.fin.reveal_of(self.keys.machine(), round).is_some()
                         && (round as usize) + 1 < CHAIN_LEN
                     {
-                        let link = self.keys.chain.reveal((round + 1) as usize);
+                        let link = self.keys.chain_reveal((round + 1) as usize);
                         let _ = self.net.publish(
                             TOPIC_BLOCKS,
-                            reveal_msg(self.keys.machine, round, &link, now_ms as u64),
+                            reveal_msg(self.keys.machine(), round, &link, now_ms as u64),
                         );
                         last_repush = now_ms;
                     }
@@ -2075,13 +2024,13 @@ impl Node {
                 // hold, my own reveal for this round may be exactly
                 // the material a peer is holding for.
                 if now_ms >= last_repush + 5_000
-                    && self.fin.reveal_of(self.keys.machine, round).is_some()
+                    && self.fin.reveal_of(self.keys.machine(), round).is_some()
                     && (round as usize) + 1 < CHAIN_LEN
                 {
-                    let link = self.keys.chain.reveal((round + 1) as usize);
+                    let link = self.keys.chain_reveal((round + 1) as usize);
                     let _ = self.net.publish(
                         TOPIC_BLOCKS,
-                        reveal_msg(self.keys.machine, round, &link, now_ms as u64),
+                        reveal_msg(self.keys.machine(), round, &link, now_ms as u64),
                     );
                     last_repush = now_ms;
                 }
@@ -2100,7 +2049,7 @@ impl Node {
         // the zero tip that no verifier accepts. Signing is therefore
         // not tied to a specific round: every round, sign each epoch
         // that has ended, is final, and is not yet signed.
-        if !observing && !self.fin.is_revoked(self.keys.machine) {
+        if !observing && !self.fin.is_revoked(self.keys.machine()) {
             for e in 0..epoch {
                 if self.hb_signed.contains(&e) {
                     continue;
@@ -2109,11 +2058,11 @@ impl Node {
                     continue;
                 }
                 let msg = self.fin.heartbeat_message(e);
-                let sig = self.keys.device.sign(rng, &msg);
-                self.heartbeats.insert((self.keys.machine, e), sig.clone());
+                let sig = self.keys.sign_device(&msg);
+                self.heartbeats.insert((self.keys.machine(), e), sig.clone());
                 let _ = self
                     .net
-                    .publish(TOPIC_VOTES, heartbeat_msg(self.keys.machine, e, &sig, round));
+                    .publish(TOPIC_VOTES, heartbeat_msg(self.keys.machine(), e, &sig, round));
                 self.hb_signed.insert(e);
             }
         }
@@ -2202,26 +2151,26 @@ impl Node {
             }
         }
 
-        if !observing && !self.fin.is_revoked(self.keys.machine) {
+        if !observing && !self.fin.is_revoked(self.keys.machine()) {
             // My reveal for NEXT round, collected during this one.
             if (round as usize) + 2 < CHAIN_LEN {
-                let link = self.keys.chain.reveal((round + 2) as usize);
-                let _ = self.fin.submit_reveal(self.keys.machine, round + 1, link);
+                let link = self.keys.chain_reveal((round + 2) as usize);
+                let _ = self.fin.submit_reveal(self.keys.machine(), round + 1, link);
                 let _ = self.net.publish(
                     TOPIC_BLOCKS,
-                    reveal_msg(self.keys.machine, round + 1, &link, round),
+                    reveal_msg(self.keys.machine(), round + 1, &link, round),
                 );
             }
             // My proposal for THIS round (its reveal was collected
             // during the previous round; propose() checks the ticket).
             let mut ops: Vec<Op> = Vec::new();
-            let joined = self.store.ledger().machines.contains(&self.keys.machine);
+            let joined = self.store.ledger().machines.contains(&self.keys.machine());
             if !joined && self.join_inflight.is_none() {
-                let cm = h_u64("poe-join", &[Part::Bytes(&self.keys.device.public_key_bytes())]);
-                let nf = h_u64("poe-join-nf", &[Part::Bytes(&self.keys.device.public_key_bytes())]);
+                let cm = h_u64("poe-join", &[Part::Bytes(&self.keys.device_public_key())]);
+                let nf = h_u64("poe-join-nf", &[Part::Bytes(&self.keys.device_public_key())]);
                 ops.push(Op::Join {
-                    machine: self.keys.machine,
-                    operator: self.keys.machine,
+                    machine: self.keys.machine(),
+                    operator: self.keys.machine(),
                     note: Note { cm, nf, asset: COIN, value: 1, born: 0 },
                 });
             }
@@ -2230,7 +2179,7 @@ impl Node {
             // mint a second one — a different block for the same
             // (machine, round) claim is equivocation evidence
             // against me on every peer that kept the first.
-            if let Some(existing) = self.fin.canonical_prop_of(self.keys.machine, round) {
+            if let Some(existing) = self.fin.canonical_prop_of(self.keys.machine(), round) {
                 if let Some(b) = self.fin.dag.get(&existing).cloned() {
                     let _ = self
                         .net
@@ -2239,7 +2188,7 @@ impl Node {
                 // fall through to the vote step without proposing
             } else {
             let parents = self.fin.dag.tips();
-            let block = Block::new(self.keys.machine, round, parents, ops_payload(&ops));
+            let block = Block::new(self.keys.machine(), round, parents, ops_payload(&ops));
             match self.fin.propose(block.clone()) {
                 Ok(poe_kernel::ClaimOutcome::Accepted) => {
                     if !ops.is_empty() {
@@ -2316,9 +2265,9 @@ impl Node {
                 let in_committee = self
                     .fin
                     .committee(target_round)
-                    .map(|c| c.contains(&self.keys.machine))
+                    .map(|c| c.contains(&self.keys.machine()))
                     .unwrap_or(false);
-                if in_committee && !self.fin.is_revoked(self.keys.machine) {
+                if in_committee && !self.fin.is_revoked(self.keys.machine()) {
                     let order = self.fin.dag.linearize();
                     let target = order.iter().find(|id| {
                         **id != self.genesis_id
@@ -2333,7 +2282,7 @@ impl Node {
                             );
                         }
                         if let Ok(sig) =
-                            self.keys.xmss.sign_persistent(&self.keys.xmss_path, target)
+                            self.keys.sign_xmss(target)
                         {
                             // Skip attestation (2026-11-15): if the
                             // round before the one I am voting on is
@@ -2345,15 +2294,12 @@ impl Node {
                                 && !self.fin.finalized.contains_key(&(target_round - 1))
                             {
                                 let msg = poe_finality::skip_message(target_round - 1);
-                                self.keys
-                                    .xmss
-                                    .sign_persistent(&self.keys.xmss_path, &msg)
-                                    .ok()
+                                self.keys.sign_xmss(&msg).ok()
                             } else {
                                 None
                             };
                             let vote = Vote {
-                                machine: self.keys.machine,
+                                machine: self.keys.machine(),
                                 round: target_round,
                                 block: *target,
                                 sig,
@@ -2414,7 +2360,7 @@ impl Node {
         // that had diverged, that silently retired a join that had
         // never landed on the real chain.)
         if self.join_inflight.is_some()
-            && self.store.ledger().machines.contains(&self.keys.machine)
+            && self.store.ledger().machines.contains(&self.keys.machine())
         {
             self.join_inflight = None;
         }
@@ -2426,7 +2372,7 @@ impl Node {
         // join forever (join_inflight only ever cleared on success).
         if let Some(proposed_at) = self.join_inflight {
             if self.fin.finalized.contains_key(&proposed_at)
-                && !self.store.ledger().machines.contains(&self.keys.machine)
+                && !self.store.ledger().machines.contains(&self.keys.machine())
             {
                 self.join_inflight = None;
             }

@@ -189,6 +189,21 @@ of it waiting.
   against it, with the triaxial audit in protocol shape
   (Sealed/Broken/Open). The seed's full claim-vs-denial determinant
   formalism is not ported (stated in the crate docs).
+- `crates/poe-vault` (PoE OS device build, Phase 0 item 2, 5/5
+  tests) — key custody behind one interface (the OS model's
+  flag 1): the `KeyVault` trait over the node's three protocol
+  key families (device ML-DSA, stateful XMSS vote key, ticket
+  chain), with signing done by the vault — a leaf index is
+  persisted before its signature is released, and no caller
+  handles secret material. The one backend is `FileVault`, the
+  software stub: it keeps the exact key files the node has
+  always used (`device.key`, `ticket.seed`, `xmss.key`), so
+  existing identities carry over unchanged, and it reports
+  itself not mainnet-eligible. The testnet node now loads and
+  signs exclusively through this interface. OS-vault and
+  secure-element backends implement the same trait in the
+  device phases. Stated scope: the libp2p peer transport key is
+  not behind the interface yet (see the crate docs).
 
 ## Step 12 — genesis, devnet, and the public testnet (12c, live)
 
@@ -552,6 +567,10 @@ entry. The liveness mechanism the design was
 missing is implemented in corrections 23–24, testnet profile;
 the two-caps design gap from the Step 10 composition proof
 stands unchanged and is still the authors' decision.
+
+PoE OS Phase 0 item 2 (2026-11-16, the key-vault interface —
+see the `crates/poe-vault` inventory entry above) brings the
+suite to **91/91 tests** (84 workspace + 7 poe-finality).
 
 ## Residue (not done, not claimed)
 

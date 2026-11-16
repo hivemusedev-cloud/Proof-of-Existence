@@ -1,0 +1,10 @@
+[package]
+name = "poe-vault"
+version = "0.1.0"
+edition = "2021"
+description = "PoE key custody: the KeyVault interface (PoE OS flag 1) and its file/software-stub backend. Signing keys are used through the interface, never handled as raw material by callers."
+
+[dependencies]
+poe-crypto = { path = "../poe-crypto" }
+poe-identity = { path = "../poe-identity" }
+rand = "0.8"

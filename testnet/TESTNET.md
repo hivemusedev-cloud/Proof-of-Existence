@@ -465,3 +465,29 @@ operations.
   flip remains outstanding (dashboard access); this push
   auto-redeploys Railway onto the compaction binary, but its
   volume state is unchanged by that.
+
+## Operations log — 2026-11-16 (later): key-vault interface lands (Phase 0 item 2)
+
+The node's protocol keys moved behind the KeyVault interface
+(`crates/poe-vault`, PoE OS flag 1): the trait covers the
+device ML-DSA key, the stateful XMSS vote key (the vault
+persists a leaf before releasing its signature) and the
+ticket chain; the node now loads and signs exclusively
+through it, on the FileVault backend — the software stub,
+which keeps the exact historical key files and reports
+itself not mainnet-eligible. Stated scope: the libp2p peer
+transport key is not behind the interface yet (see the
+crate docs). Full suite 91/91 (84 workspace + 7
+poe-finality; logs
+~/workspace/poe-build-2026-11-11/test-logs-2026-11-16/*-vault.log).
+
+node1 was redeployed on the vault binary the same day
+(systemd units had been wiped by another VM replacement;
+reinstalled, node2/node3 left retired, 6500M drop-in
+re-added). Observed on boot: `KEYS backend=file (software
+stub) mainnet_eligible=false`; machine unchanged
+(1123122162023658167 — the vault reads the same device.key);
+full POEFIN4 resume; HOLDing round 3361; RSS ~55 MB.
+Railway remains on its fork lineage pending the bundle
+variable flip; canonical head is still the epoch-209
+anchor.

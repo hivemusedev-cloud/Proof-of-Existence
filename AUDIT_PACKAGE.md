@@ -48,13 +48,18 @@ was built per build step and lists every known deviation.
    the Compute Seed), XMSS (index persistence before signing),
    ML-DSA / ML-KEM wrappers.
 4. `crates/poe-zk` — the binding STARK. Never externally reviewed.
-   Known integration gap, stated in its BENCHMARKS.md: the proved
-   fold is not yet bound to the node's accumulator hash H.
+   The fold's seed is H-anchored since 2026-11-16 (finding 11);
+   the fold itself is still algebraic, not an in-circuit
+   Poseidon2 accumulator — the review should judge that choice.
 5. `crates/poe-node` (testnet node) — networking, resume/bundle
    state handling, history serving. The site of every
    implementation bug found so far (below).
 6. `crates/poe-identity`, `poe-epoch`, `poe-wallet`, `poe-msg`,
-   `poe-store`, `poe-compute`, `poe-v2`, `poe-mobile`, `poe-net`.
+   `poe-store`, `poe-compute`, `poe-v2`, `poe-mobile`, `poe-net`,
+   `poe-vault` (key custody behind the KeyVault interface,
+   2026-11-16; the FileVault backend is a software stub and the
+   libp2p peer key is not yet behind the interface — both
+   stated in the crate docs).
 
 ## Design questions
 
