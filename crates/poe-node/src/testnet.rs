@@ -1010,6 +1010,9 @@ struct Node {
     /// Last peer re-dial inside pump_until (see there).
     last_redial_ms: u128,
     keys: Box<dyn KeyVault>,
+    /// The local control surface's shared state (Phase 0 item 3):
+    /// the loop refreshes its snapshots and drains its op queue.
+    control: crate::control::Shared,
     my_announcement: Announcement,
     announcements: BTreeMap<u64, Announcement>,
     pending_ann: Vec<Announcement>,
@@ -1250,6 +1253,16 @@ impl Node {
         Ok(())
     }
 
+    /// Refresh the control surface's snapshots from the ledger
+    /// as it now stands (Phase 0 item 3). Called once at startup
+    /// and at the end of every processed round, after all
+    /// applies and closes for that round.
+    fn refresh_control(&self) {
+        let head = self.fin.finalized.keys().max().copied();
+        let mut ctl = self.control.write().expect("control lock");
+        ctl.refresh(self.store.ledger(), self.next_apply, head);
+    }
+
     fn try_close(&mut self, epoch: u64, dir: &Path) -> io::Result<bool> {
         let rpe = self.spec.rounds_per_epoch;
         if self.last_closed == Some(epoch) || self.store.ledger().now != epoch {
@@ -1409,6 +1422,20 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     println!("KEYS backend={} mainnet_eligible={}", keys.backend_name(), keys.mainnet_eligible());
     let machine = keys.machine();
 
+    // The local control surface's shared state (Phase 0 item 3).
+    // My wallet marks are the join marks: the same derivation the
+    // proposer uses for the join op and the close stamps grants
+    // with, so the wallet view can find this machine's notes.
+    let control = crate::control::ControlShared::new(
+        machine,
+        keys.backend_name(),
+        (
+            h_u64("poe-join", &[Part::Bytes(&keys.device_public_key())]),
+            h_u64("poe-join-nf", &[Part::Bytes(&keys.device_public_key())]),
+        ),
+        dir.join("wallet"),
+    );
+
     // Self-attestation under the (public) testnet root.
     let root_sk = hex_decode(ROOT_SK_HEX)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "embedded root key"))?;
@@ -1548,6 +1575,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         peer_addrs,
         last_redial_ms: 0,
         keys,
+        control: control.clone(),
         my_announcement: my_announcement.clone(),
         announcements: BTreeMap::new(),
         pending_ann: Vec::new(),
@@ -1578,6 +1606,11 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     } else {
         node.spec.rounds_per_epoch
     };
+    // The local control surface starts with the node (Phase 0
+    // item 3): socket in the data dir, local-only, with the
+    // startup snapshot already refreshed in.
+    node.refresh_control();
+    crate::control::serve(control, dir.join("control.sock"));
     // Register bundle announcements (restores identity bindings), then self.
     for a in take_bundle_announcements() {
         node.register_announcement(&a, node.store.ledger().now);
@@ -2187,11 +2220,27 @@ impl Node {
                 }
                 // fall through to the vote step without proposing
             } else {
+            // Ops queued through the local control surface
+            // (Phase 0 item 3): re-validated against the live
+            // ledger — the surface pre-validated against a
+            // snapshot that may have moved — and dropped with a
+            // log line if stale, never forced into the block.
+            {
+                let mut ctl = self.control.write().expect("control lock");
+                for op in ctl.pending.drain(..) {
+                    if self.store.ledger().accepts(&op) {
+                        ops.push(op);
+                    } else {
+                        println!("CONTROL dropping a queued op: no longer valid against the ledger");
+                    }
+                }
+            }
+            let proposed_join = ops.iter().any(|o| matches!(o, Op::Join { .. }));
             let parents = self.fin.dag.tips();
             let block = Block::new(self.keys.machine(), round, parents, ops_payload(&ops));
             match self.fin.propose(block.clone()) {
                 Ok(poe_kernel::ClaimOutcome::Accepted) => {
-                    if !ops.is_empty() {
+                    if proposed_join {
                         self.join_inflight = Some(round);
                     }
                     let _ = self
@@ -2394,6 +2443,7 @@ impl Node {
         // failed write only degrades resume freshness (the epoch
         // bundle remains as fallback), so it never fails the round.
         let _ = write_finstate(&dir.join("finstate.bin"), &self.fin, self.next_apply);
+        self.refresh_control();
         Ok(())
     }
 }

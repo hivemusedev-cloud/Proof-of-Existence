@@ -8,6 +8,7 @@
 //! built from its frozen spec, attested devices bound, a week of acts
 //! persisted through poe-store, a close, a restart, and a replay check.
 
+mod control;
 mod genesis;
 mod testnet;
 
@@ -96,6 +97,60 @@ fn main() {
                 eprintln!("testnet node failed: {e}");
                 std::process::exit(1);
             }
+        }
+        return;
+    }
+    if args.len() > 1 && args[1] == "ctl" {
+        // Client for the node's local control surface (Phase 0
+        // item 3): poe-node ctl [--dir <dir>] <method> [params-json]
+        // Sends one JSON line to <dir>/control.sock and prints the
+        // response line. Local only, like the surface itself.
+        #[cfg(unix)]
+        {
+            use std::io::{BufRead, BufReader, Write};
+            let mut dir = std::env::temp_dir().join("poe-testnet-node");
+            let mut rest: Vec<&str> = Vec::new();
+            let mut i = 2;
+            while i < args.len() {
+                if args[i] == "--dir" && i + 1 < args.len() {
+                    dir = std::path::PathBuf::from(&args[i + 1]);
+                    i += 2;
+                } else {
+                    rest.push(&args[i]);
+                    i += 1;
+                }
+            }
+            let Some(method) = rest.first() else {
+                eprintln!("usage: poe-node ctl [--dir <dir>] <method> [params-json]");
+                std::process::exit(2);
+            };
+            let params = rest.get(1).copied().unwrap_or("{}");
+            let request = format!("{{\"method\":\"{method}\",\"params\":{params}}}");
+            let sock = dir.join("control.sock");
+            match std::os::unix::net::UnixStream::connect(&sock) {
+                Ok(mut stream) => {
+                    let _ = stream.write_all(request.as_bytes());
+                    let _ = stream.write_all(b"\n");
+                    let mut line = String::new();
+                    let mut reader = BufReader::new(stream);
+                    match reader.read_line(&mut line) {
+                        Ok(_) => println!("{}", line.trim()),
+                        Err(e) => {
+                            eprintln!("ctl: no response from {}: {e}", sock.display());
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("ctl: cannot reach the node at {}: {e} (is it running?)", sock.display());
+                    std::process::exit(1);
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            eprintln!("ctl is unavailable on this platform yet (Unix sockets only)");
+            std::process::exit(1);
         }
         return;
     }

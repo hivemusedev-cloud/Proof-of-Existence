@@ -204,6 +204,25 @@ of it waiting.
   secure-element backends implement the same trait in the
   device phases. Stated scope: the libp2p peer transport key is
   not behind the interface yet (see the crate docs).
+- The local control surface (PoE OS device build, Phase 0
+  item 3) — `crates/poe-node/src/control.rs`, with the
+  `poe-node ctl` client. A Unix-domain socket in the node's
+  data directory (`control.sock`, mode 0600, one JSON object
+  per line): local-only IPC, no network listener, the same
+  trust boundary as the key files. Live over it: node status;
+  the wallet (this machine's live notes from the ledger;
+  Existence Container import/list; offline shows performed
+  and recorded — the double-show drill runs end to end
+  through the surface in tests; a queued-transfer path that
+  pre-validates with `Ledger::accepts` and drains into the
+  proposer's op list with re-validation); and poe-v2's
+  genesis curve in-process, answering state and quotes from
+  its real math. V2 execution (swap/bridge) refuses with a
+  `gated` error naming the pending Stage 4 decision — the
+  lanes light up when the gates open, not before. Transfers
+  take complete note marks: the ledger's notes are bearer
+  instruments and no note-addressing convention exists yet;
+  none was invented for this wiring.
 
 ## Step 12 — genesis, devnet, and the public testnet (12c, live)
 
@@ -571,6 +590,9 @@ stands unchanged and is still the authors' decision.
 PoE OS Phase 0 item 2 (2026-11-16, the key-vault interface —
 see the `crates/poe-vault` inventory entry above) brings the
 suite to **91/91 tests** (84 workspace + 7 poe-finality).
+Phase 0 item 3 (2026-11-16, the local control surface — see
+the inventory entry above) brings it to **94/94 tests**
+(87 workspace + 7 poe-finality).
 
 ## Residue (not done, not claimed)
 

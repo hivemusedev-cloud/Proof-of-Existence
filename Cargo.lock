@@ -2633,7 +2633,9 @@ dependencies = [
  "poe-kernel",
  "poe-net",
  "poe-store",
+ "poe-v2",
  "poe-vault",
+ "poe-wallet",
  "rand 0.8.8",
  "tokio",
 ]

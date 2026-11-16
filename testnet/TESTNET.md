@@ -491,3 +491,33 @@ full POEFIN4 resume; HOLDing round 3361; RSS ~55 MB.
 Railway remains on its fork lineage pending the bundle
 variable flip; canonical head is still the epoch-209
 anchor.
+
+## Operations log — 2026-11-16 (later still): local control surface lands (Phase 0 item 3)
+
+The node gained its local control surface
+(`crates/poe-node/src/control.rs` + the `poe-node ctl`
+client): a Unix socket at `<dir>/control.sock`, mode 0600,
+JSON-lines, no network listener. Live over it: node status;
+the wallet (live notes from the ledger, Existence Container
+import/list, offline shows); a transfer queue that
+pre-validates with `Ledger::accepts` and drains into the
+proposer's op list with re-validation; and poe-v2's genesis
+curve in-process for state and quotes — execution
+(swap/bridge) refuses with a `gated` error naming the
+pending Stage 4 AskAdmin q-b50bcedac227dd454d70955bcd5acdfc.
+Full suite 94/94 (87 workspace + 7 poe-finality; logs
+~/workspace/poe-build-2026-11-11/test-logs-2026-11-16/*-control.log).
+
+node1 redeployed on the control-surface binary the same
+day. Observed: boot log `CONTROL listening on
+.../node1/control.sock (local only)`; socket mode 0600;
+machine unchanged; POEFIN4 resume, HOLDing round 3361;
+RSS ~55 MB. Smoke over the socket, verbatim results:
+`status` → joined, epoch 210, head round 3360, minted
+300000000399999, v2_gate closed. `wallet.notes` → one live
+note, value 100000 (the current window's grant).
+`v2.state` → spot 10000000 (P0), pool 3e21 x 3e14.
+`v2.quote` buy 1e18 → out 99966677774. `v2.swap` → the
+gated refusal. No epoch can close until a canonical peer
+network exists, so the transfer queue's live drain is
+verified by unit test, not yet by a live proposal.
