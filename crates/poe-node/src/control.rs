@@ -134,8 +134,9 @@ impl ControlShared {
 
 // -- the server ---------------------------------------------------------------
 
-/// Start the control thread on `sock_path`. Unix only; on other
-/// platforms this logs the stated Phase 1 deferral and returns.
+/// Start the control thread on `sock_path` (Unix domain
+/// socket, mode 0600). The Windows named-pipe counterpart is
+/// below; the dispatch (`handle_line`) is shared.
 #[cfg(unix)]
 pub fn serve(shared: Shared, sock_path: PathBuf) {
     std::thread::spawn(move || {
@@ -165,9 +166,101 @@ pub fn serve(shared: Shared, sock_path: PathBuf) {
     });
 }
 
-#[cfg(not(unix))]
+/// Start the control thread on a Windows named pipe
+/// (`\\.\pipe\poe-node-<dirname>`, the name
+/// `appenv::control_endpoint` fixes). The pipe's default ACL
+/// restricts it to the creating user, SYSTEM and admins —
+/// the same local trust boundary as the Unix socket's 0600.
+/// One request per connection, exactly as on Unix: a JSON
+/// line in, a JSON line out.
+#[cfg(windows)]
+pub fn serve(shared: Shared, pipe_path: PathBuf) {
+    std::thread::spawn(move || {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE,
+        };
+        use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile, PIPE_ACCESS_DUPLEX};
+        use windows_sys::Win32::System::Pipes::{
+            ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
+            PIPE_TYPE_BYTE, PIPE_WAIT,
+        };
+        let name: Vec<u16> =
+            pipe_path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        println!("CONTROL listening on {} (local only)", pipe_path.display());
+        loop {
+            let handle = unsafe {
+                CreateNamedPipeW(
+                    name.as_ptr(),
+                    PIPE_ACCESS_DUPLEX,
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                    1,
+                    65_536,
+                    65_536,
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE {
+                eprintln!(
+                    "CONTROL surface failed to create {} (error {})",
+                    pipe_path.display(),
+                    unsafe { GetLastError() }
+                );
+                return;
+            }
+            let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) } != 0
+                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+            if connected {
+                let mut buf: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 4096];
+                loop {
+                    let mut read = 0u32;
+                    let ok = unsafe {
+                        ReadFile(
+                            handle,
+                            chunk.as_mut_ptr(),
+                            chunk.len() as u32,
+                            &mut read,
+                            std::ptr::null_mut(),
+                        )
+                    };
+                    if ok == 0 || read == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..read as usize]);
+                    if buf.contains(&b'\n') {
+                        break;
+                    }
+                }
+                let line = String::from_utf8_lossy(&buf).trim().to_string();
+                if !line.is_empty() {
+                    let response = handle_line(&line, &shared);
+                    let mut out = response.into_bytes();
+                    out.push(b'\n');
+                    let mut written = 0u32;
+                    unsafe {
+                        WriteFile(
+                            handle,
+                            out.as_ptr(),
+                            out.len() as u32,
+                            &mut written,
+                            std::ptr::null_mut(),
+                        );
+                    }
+                }
+            }
+            unsafe {
+                DisconnectNamedPipe(handle);
+                CloseHandle(handle);
+            }
+        }
+    });
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn serve(_shared: Shared, _sock_path: PathBuf) {
-    eprintln!("CONTROL surface unavailable on this platform yet (Unix sockets only; named pipes are Phase 1 work)");
+    eprintln!("CONTROL surface unavailable on this platform");
 }
 
 // -- request dispatch ---------------------------------------------------------

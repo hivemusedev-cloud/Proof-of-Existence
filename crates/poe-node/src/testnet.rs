@@ -36,7 +36,9 @@ use poe_kernel::{Spend, COIN};
 use poe_net::{NetNode, TOPIC_ACTS, TOPIC_BLOCKS, TOPIC_VOTES};
 use poe_store::encode::{decode_op, encode_ledger, encode_op, Reader};
 use poe_store::Store;
-use poe_vault::{FileVault, KeyVault, ThreadedKeyringVault};
+use poe_vault::{FileVault, KeyVault};
+#[cfg(unix)]
+use poe_vault::ThreadedKeyringVault;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -1354,6 +1356,71 @@ pub fn root_keygen(dir: &Path) -> io::Result<String> {
     Ok(hex_encode(&kp.public_key_bytes()))
 }
 
+// -- POE_VAULT backend loaders -------------------------------------------------
+// One helper per OS-store backend; on platforms where the
+// backend does not exist the helper is a clean refusal, never
+// a silent downgrade to another backend.
+
+/// `POE_VAULT=keyring` — the Unix Secret Service backend, via
+/// the threaded front-end: this node runs inside a tokio
+/// runtime, and the keyring's blocking D-Bus transport cannot
+/// start its own runtime there (it panics) — custody lives on
+/// the vault's own thread.
+#[cfg(unix)]
+fn keyring_vault(vault_id: &str) -> io::Result<Box<dyn KeyVault>> {
+    Ok(Box::new(
+        ThreadedKeyringVault::load_or_create(vault_id, CHAIN_LEN, XMSS_HEIGHT)
+            .map_err(io::Error::other)?,
+    ))
+}
+
+#[cfg(not(unix))]
+fn keyring_vault(_vault_id: &str) -> io::Result<Box<dyn KeyVault>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "POE_VAULT=keyring is only available on Unix (Secret Service)",
+    ))
+}
+
+/// `POE_VAULT=dpapi` — the Windows DPAPI backend.
+#[cfg(windows)]
+fn dpapi_vault(dir: &Path, rng: &mut rand::rngs::ThreadRng) -> io::Result<Box<dyn KeyVault>> {
+    Ok(Box::new(
+        poe_vault::DpapiVault::load_or_create(dir, rng, CHAIN_LEN, XMSS_HEIGHT)
+            .map_err(io::Error::other)?,
+    ))
+}
+
+#[cfg(not(windows))]
+fn dpapi_vault(_dir: &Path, _rng: &mut rand::rngs::ThreadRng) -> io::Result<Box<dyn KeyVault>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "POE_VAULT=dpapi is only available on Windows",
+    ))
+}
+
+/// `POE_VAULT=keychain` — the macOS Keychain backend.
+#[cfg(target_os = "macos")]
+fn keychain_vault(vault_id: &str) -> io::Result<Box<dyn KeyVault>> {
+    Ok(Box::new(
+        poe_vault::KeychainVault::load_or_create(
+            vault_id,
+            &mut rand::thread_rng(),
+            CHAIN_LEN,
+            XMSS_HEIGHT,
+        )
+        .map_err(io::Error::other)?,
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_vault(_vault_id: &str) -> io::Result<Box<dyn KeyVault>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "POE_VAULT=keychain is only available on macOS",
+    ))
+}
+
 pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     let spec = Spec::parse(SPEC_TEXT)?;
     // The late-start check runs at PROCESS start, before key loading:
@@ -1417,29 +1484,24 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     let dir = args.dir.clone();
     std::fs::create_dir_all(&dir)?;
     // Key custody backend (PoE OS flag 1): the file stub by
-    // default; POE_VAULT=keyring selects the OS keyring, with the
-    // vault named after the node directory. The choice is
-    // explicit and logged, and a keyring failure is fatal — the
-    // node never downgrades custody silently. A keyring vault is
-    // a DIFFERENT identity from the same directory's file keys
-    // (its secrets live in the keyring, not in device.key), so
-    // switching backends is an operator's migration decision,
-    // not a runtime detail.
+    // default; POE_VAULT selects an OS store — keyring (Unix
+    // Secret Service), dpapi (Windows), keychain (macOS) —
+    // with the store vault named after the node directory.
+    // The choice is explicit and logged, and a store failure
+    // or a backend that does not exist on this platform is
+    // fatal — the node never downgrades custody silently. A
+    // store vault is a DIFFERENT identity from the same
+    // directory's file keys (its secrets live in the store,
+    // not in device.key), so switching backends is an
+    // operator's migration decision, not a runtime detail.
+    let vault_id = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "node".to_string());
     let keys: Box<dyn KeyVault> = match std::env::var("POE_VAULT").as_deref() {
-        Ok("keyring") => {
-            let vault_id = dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "node".to_string());
-            // The threaded front-end: this node runs inside a
-            // tokio runtime, and the keyring's blocking D-Bus
-            // transport cannot start its own runtime there (it
-            // panics) — custody lives on the vault's own thread.
-            Box::new(
-                ThreadedKeyringVault::load_or_create(&vault_id, CHAIN_LEN, XMSS_HEIGHT)
-                    .map_err(io::Error::other)?,
-            )
-        }
+        Ok("keyring") => keyring_vault(&vault_id)?,
+        Ok("dpapi") => dpapi_vault(&dir, &mut rng)?,
+        Ok("keychain") => keychain_vault(&vault_id)?,
         Ok("file") | Err(_) => Box::new(
             FileVault::load_or_create(&dir, &mut rng, CHAIN_LEN, XMSS_HEIGHT)
                 .map_err(io::Error::other)?,
@@ -1447,7 +1509,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         Ok(other) => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("unknown POE_VAULT backend '{other}' (expected 'file' or 'keyring')"),
+                format!("unknown POE_VAULT backend '{other}' (expected 'file', 'keyring', 'dpapi' or 'keychain' — availability depends on the platform)"),
             ));
         }
     };
@@ -1642,7 +1704,7 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
     // item 3): socket in the data dir, local-only, with the
     // startup snapshot already refreshed in.
     node.refresh_control();
-    crate::control::serve(control, dir.join("control.sock"));
+    crate::control::serve(control, std::path::PathBuf::from(crate::appenv::control_endpoint(&dir)));
     // Register bundle announcements (restores identity bindings), then self.
     for a in take_bundle_announcements() {
         node.register_announcement(&a, node.store.ledger().now);

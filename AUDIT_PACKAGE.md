@@ -57,9 +57,12 @@ was built per build step and lists every known deviation.
 6. `crates/poe-identity`, `poe-epoch`, `poe-wallet`, `poe-msg`,
    `poe-store`, `poe-compute`, `poe-v2`, `poe-mobile`, `poe-net`,
    `poe-vault` (key custody behind the KeyVault interface,
-   2026-11-16; the FileVault backend is a software stub and the
-   libp2p peer key is not yet behind the interface — both
-   stated in the crate docs).
+   2026-11-16; backends: the FileVault software stub, the
+   Secret Service keyring, Windows DPAPI and macOS Keychain —
+   the platform backends added 2026-11-17 are compile-verified
+   for their targets and exercised under Wine where possible,
+   not yet audited on-device; the libp2p peer key is not yet
+   behind the interface — stated in the crate docs).
 
 ## Design questions
 

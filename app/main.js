@@ -46,9 +46,10 @@ function controlEndpoint(dir) {
 // build next to the app/ directory.
 function nodeBinary() {
   if (process.env.POE_NODE_BIN) return process.env.POE_NODE_BIN;
-  const packaged = path.join(process.resourcesPath || '', 'bin', 'poe-node');
+  const exe = process.platform === 'win32' ? 'poe-node.exe' : 'poe-node';
+  const packaged = path.join(process.resourcesPath || '', 'bin', exe);
   if (process.resourcesPath && fs.existsSync(packaged)) return packaged;
-  return path.join(__dirname, '..', 'target', 'release', 'poe-node');
+  return path.join(__dirname, '..', 'target', 'release', exe);
 }
 
 // The first-run bundle (APP_PACKAGING lifecycle step 1): an
@@ -79,10 +80,9 @@ function parseResponse(line) {
 
 function ctl(method, params = {}, timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
-    if (process.platform === 'win32') {
-      reject(new Error('the Windows named-pipe client lands with the pipe server (Phase 1)'));
-      return;
-    }
+    // Node's net module speaks both transports by path: a
+    // Unix socket file here, a Windows named pipe
+    // (\\.\pipe\...) on win32 — same JSON-lines protocol.
     const conn = net.createConnection(ENDPOINT);
     let buf = '';
     const timer = setTimeout(() => {

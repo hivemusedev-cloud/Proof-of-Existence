@@ -13,11 +13,11 @@ it does not redefine them.
 |---|---|---|
 | Node service | `poe-node testnet --dir <data dir>` — the same binary as the testnet's | exists |
 | Control endpoint | Local-only IPC the shell talks to: status, wallet, poe-v2 quotes (execution gated) | exists (Phase 0 item 3) |
-| Key custody | `KeyVault` backends: file stub; OS keyring (Secret Service) via `POE_VAULT` | exists (Phase 0 item 2, Phase 1) |
+| Key custody | `KeyVault` backends via `POE_VAULT`: file stub; OS keyring (Secret Service); Windows DPAPI; macOS Keychain | exists (Phase 0 item 2, Phase 1; platform backends completed 2026-11-17) |
 | Data-dir resolution | `poe-node paths` | exists (this phase) |
 | Service definition | `poe-node service-unit` (systemd user unit, Linux) | exists (this phase) |
 | Shell | The desktop UI over the control endpoint — **Electron** (owner's decision, 2026-11-16, over the Tauri recommendation, for the control it gives) | v1 built in `app/` — supervision, adoption, all control verbs wired; headless smoke verified |
-| Installers / signing | Per-OS packages and signed binaries | **Linux done 2026-11-16:** AppImage + .deb via electron-builder, carrying the node binary + bundle as packaged resources; extracted-AppImage smoke run verified end-to-end. Unsigned (owner's signing key not configured). Windows/macOS packages later in Phase 1 |
+| Installers / signing | Per-OS packages and signed binaries | **Linux done 2026-11-16:** AppImage + .deb via electron-builder, carrying the node binary + bundle as packaged resources; extracted-AppImage smoke run verified end-to-end. **Windows portable .exe done 2026-11-17** (same packaged-resources arrangement, `poe-node.exe` cross-built for x86_64-pc-windows-gnu); the NSIS installer and the macOS package need their native build environments (Wine-32 on this host; a Mac for macOS). All packages unsigned (owner's signing key not configured) |
 
 ## Data directory
 
@@ -63,10 +63,10 @@ an app update never strands a node's state.
 
 - **Unix:** `<data dir>/control.sock`, mode 0600, one JSON
   object per line (see `control.rs` for the verb set).
-- **Windows:** the named pipe `\\.\pipe\poe-node-<dirname>` —
-  the name is fixed now (`poe-node paths` prints it); the pipe
-  *server* is Phase 1 shell-stage work, stated as such in the
-  control surface's own docs.
+- **Windows:** the named pipe `\\.\pipe\poe-node-<dirname>`
+  (`poe-node paths` prints it); the pipe server and the
+  `poe-node ctl` pipe client landed with the Phase 1
+  completion (2026-11-17) — same JSON-lines protocol as Unix.
 - The endpoint is local-only by design: no listener, no
   network surface, the same trust boundary as the key files.
 
@@ -84,9 +84,17 @@ or unavailable backend is fatal — never a silent downgrade.
   is a **different identity** from the same directory's file
   keys — switching backends is a migration (a new machine
   identity joins afresh), and the app must present it that way.
-- Neither backend is mainnet-eligible; a mainnet-profile build
-  refuses both. Hardware custody is a later phase's backend
-  behind the same trait.
+- `dpapi` (Windows): the three secrets as DPAPI-protected
+  files under the data directory's `dpapi/` folder; custody
+  at rest is bound to the Windows user and machine — a copy
+  of the folder taken to another user or machine does not
+  unprotect, by design.
+- `keychain` (macOS): the three secrets as generic-password
+  items in the user's Keychain (service
+  `app.poe.suite.vault`).
+- No backend is mainnet-eligible; a mainnet-profile build
+  refuses all of them. Hardware custody is a later phase's
+  backend behind the same trait.
 
 ## What the shell owes the contract
 

@@ -39,7 +39,8 @@ npm start            # uses ../target/release/poe-node
 
 Useful environment: `POE_DIR` (data directory), `POE_NODE_BIN`
 (node binary), `POE_BUNDLE_PATH` (first-run bundle),
-`POE_VAULT` (`file` | `keyring`).
+`POE_VAULT` (`file` | `keyring` | `dpapi` on Windows |
+`keychain` on macOS).
 
 ## Verify it (headless smoke)
 
@@ -78,11 +79,29 @@ packages are **unsigned**: signing needs the owner's key
 (GPG for the .deb; AppImage signing is optional), and no key
 is configured in this repo.
 
+## Windows package
+
+```sh
+npm run dist:win      # NSIS installer + portable .exe into dist/
+```
+
+Built with `build-win.json`: the node service is the
+cross-built `../target/x86_64-pc-windows-gnu/release/
+poe-node.exe`, placed at `resources/bin/poe-node.exe` with
+the same bundled testnet bundle. The shell's control client
+speaks to the node's Windows named pipe
+(`\\.\pipe\poe-node-<dirname>`) — Node's `net` module treats
+a pipe path as the endpoint, so the protocol and client code
+are the same as on Unix. A portable executable was built and
+verified on this host 2026-11-17 (the NSIS installer needs a
+32-bit Wine on the Linux build host); the owner's on-device
+verification steps are in `WINDOWS_WALKTHROUGH.md`. The
+package is **unsigned** (no owner's certificate configured),
+so Windows SmartScreen will ask on first run.
+
 ## Not yet
 
-The Windows named-pipe client (the pipe server itself is
-shell-stage work on the node side), Windows/macOS packages
-and their store vault backends (DPAPI/Keychain), and signed
-binaries (owner's signing keys). Testnet profile only — the
-V2 gate and mainnet gates are the node's, and the shell
-inherits them.
+The macOS package (needs a Mac to build) and signed binaries
+(owner's signing keys). Testnet profile only — the V2 gate
+and mainnet gates are the node's, and the shell inherits
+them.

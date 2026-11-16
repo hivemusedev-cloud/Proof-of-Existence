@@ -69,6 +69,16 @@ pub mod keyring;
 #[cfg(feature = "os-keyring")]
 pub use keyring::{KeyringVault, ThreadedKeyringVault};
 
+#[cfg(windows)]
+pub mod dpapi;
+#[cfg(windows)]
+pub use dpapi::DpapiVault;
+
+#[cfg(target_os = "macos")]
+pub mod keychain;
+#[cfg(target_os = "macos")]
+pub use keychain::KeychainVault;
+
 /// Everything that can go wrong between a caller and its keys.
 #[derive(Debug)]
 pub enum VaultError {

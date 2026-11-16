@@ -557,3 +557,55 @@ redeployed on the same binary, file backend as before:
 machine unchanged, POEFIN4 resume, HOLDing round 3361.
 Railway remains on its fork lineage pending the bundle-URL
 flip (owner's dashboard action, unchanged).
+
+## Operations log — 2026-11-17: Phase 1 completed, Phase 2 started
+
+Phase 1 completion (owner's instruction, 2026-11-17): the
+Windows named-pipe control server and the `poe-node ctl` pipe
+client landed (same JSON-lines protocol as the Unix socket);
+poe-vault gained the two remaining platform backends —
+`DpapiVault` (Windows DPAPI-protected files under the data
+directory's `dpapi/` folder) and `KeychainVault` (macOS
+Keychain generic-password items) — behind the same KeyVault
+trait, neither mainnet-eligible, like the others. poe-node
+cross-builds for x86_64-pc-windows-gnu (whole tree incl.
+libp2p) and poe-vault type-checks for aarch64-apple-darwin.
+Full Unix suite re-run green: 98/98. The Electron shell's
+control client now speaks the pipe on Windows, and a Windows
+portable package was built via electron-builder
+(`app/build-win.json`); the NSIS installer needs a 32-bit
+Wine on this build host (install in progress at the time of
+writing). The owner's on-device verification steps are in
+`app/WINDOWS_WALKTHROUGH.md`.
+
+Windows binary exercised under Wine on this host (an
+emulation layer — the owner's real Windows run is the
+deciding check): `poe-node.exe paths` prints the Windows
+data directory and the pipe name; a scratch node with
+POE_VAULT=dpapi created its identity entirely in
+DPAPI-protected files (device.key, ticket.seed, xmss.key —
+Wine crypt32 blobs), logged `KEYS backend=Windows DPAPI
+mainnet_eligible=false`, synced from the epoch-209 bundle
+(epoch 210, minted 300000000399999), listened on
+\\.\pipe\poe-node-scratch-wine, applied round 3361 and
+exited cleanly. The first attempt at this run was cut by a
+runtime restart during XMSS generation; the completed run
+reloaded the two protected files the interrupted run had
+written, which is also the unprotect-path evidence.
+
+Phase 2 started the same day (owner's instruction): the
+Android identity app was built and packaged as a signed
+debug APK on this host (manual kotlinc/d8/aapt2 pipeline —
+the sandbox's network policy blocks Gradle's loopback; the
+Gradle project is in the tree), and the iOS app sources +
+Swift bindings were written for assembly on the owner's
+Mac. See `mobile/README.md`. Neither app has run on a
+device yet.
+
+node1 was found down after a VM replacement wiped its
+systemd unit (the standing pattern) and was restored the
+standard way (units reinstalled, node2/node3 left retired,
+6.5 GB drop-in re-added); it resumed from its POEFIN4
+finstate toward HOLDing round 3361 on the epoch-209 anchor,
+as before. Railway remains on its fork lineage pending the
+bundle-URL flip (owner's dashboard action, unchanged).

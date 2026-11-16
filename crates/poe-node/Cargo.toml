@@ -14,8 +14,16 @@ rand = "0.8"
 poe-dag = { path = "../poe-dag" }
 poe-finality = { path = "../poe-finality" }
 poe-net = { path = "../poe-net" }
-poe-vault = { path = "../poe-vault", features = ["os-keyring"] }
+poe-vault = { path = "../poe-vault" }
 poe-wallet = { path = "../poe-wallet" }
 poe-v2 = { path = "../poe-v2" }
 libp2p = { version = "0.56", features = ["gossipsub", "mdns", "tcp", "noise", "yamux", "tokio", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs"] }
+
+[target.'cfg(unix)'.dependencies]
+# The Secret Service keyring backend exists only on Unix.
+poe-vault = { path = "../poe-vault", features = ["os-keyring"] }
+
+[target.'cfg(windows)'.dependencies]
+# Named pipes for the Windows control surface.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes"] }

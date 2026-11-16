@@ -196,7 +196,7 @@ of it waiting.
   ML-DSA, stateful XMSS vote key, ticket chain), with signing
   done by the vault — a leaf index is persisted before its
   signature is released, and no caller handles secret material.
-  Two backends. `FileVault`, the software stub: it keeps the
+  Four backends. `FileVault`, the software stub: it keeps the
   exact key files the node has always used (`device.key`,
   `ticket.seed`, `xmss.key`), so existing identities carry over
   unchanged. `KeyringVault` (Phase 1): the same three secrets
@@ -206,10 +206,21 @@ of it waiting.
   (`ThreadedKeyringVault`) because the keyring's blocking
   transport cannot run inside the node's async runtime — the
   battery includes that regression test, run against a live
-  keyring. Both backends report themselves not
-  mainnet-eligible: no commodity OS store signs ML-DSA/XMSS
-  internally, so the keyring removes plaintext-at-rest, not
-  memory exposure (the crate docs state this plainly). The
+  keyring. `DpapiVault` (Windows, Phase 1 completion): the
+  three secrets as DPAPI-protected files under the data
+  directory's `dpapi/` folder — custody at rest bound to the
+  Windows user and machine, selected with `POE_VAULT=dpapi`.
+  `KeychainVault` (macOS, Phase 1 completion): the three
+  secrets as generic-password items in the user's Keychain,
+  selected with `POE_VAULT=keychain`. The platform backends
+  are compile-verified for their targets from the Linux build
+  host (the Windows binary is also exercised under Wine; the
+  owner's on-device verification is the walkthrough in
+  `app/WINDOWS_WALKTHROUGH.md`). All backends report
+  themselves not mainnet-eligible: no commodity OS store
+  signs ML-DSA/XMSS internally, so the platform stores remove
+  plaintext-at-rest, not memory exposure (the crate docs
+  state this plainly). The
   testnet node loads and signs exclusively through this
   interface. Stated scope: the libp2p peer transport key is
   not behind the interface yet (see the crate docs).
@@ -217,8 +228,11 @@ of it waiting.
   item 3) — `crates/poe-node/src/control.rs`, with the
   `poe-node ctl` client. A Unix-domain socket in the node's
   data directory (`control.sock`, mode 0600, one JSON object
-  per line): local-only IPC, no network listener, the same
-  trust boundary as the key files. Live over it: node status;
+  per line) on Unix, and the named pipe
+  `\\.\pipe\poe-node-<dirname>` on Windows (Phase 1
+  completion, 2026-11-17): local-only IPC, no network
+  listener, the same trust boundary as the key files, and the
+  same JSON-lines protocol on both. Live over it: node status;
   the wallet (this machine's live notes from the ledger;
   Existence Container import/list; offline shows performed
   and recorded — the double-show drill runs end to end
@@ -239,7 +253,7 @@ of it waiting.
   paths`: XDG on Linux, Application Support on macOS, local
   app data on Windows; `POE_DIR` override), the control
   endpoint's name on each platform (the Windows named-pipe
-  name is fixed now, its server is shell-stage work), a
+  server landed with the Phase 1 completion, 2026-11-17), a
   generated systemd user unit for the suite's service
   (`poe-node service-unit`), and the lifecycle contract
   (first-run bundle sync, readiness = the control endpoint
@@ -250,6 +264,28 @@ of it waiting.
   a running one), and renders Overview / Wallet / Swap &
   Bridge / Node views over the control endpoint — verified by
   a headless smoke against a fresh node (see `app/README.md`).
+  Packages: Linux AppImage + .deb and a Windows portable
+  executable via electron-builder (all unsigned — no owner
+  signing key configured); the owner's Windows verification
+  walkthrough is `app/WINDOWS_WALKTHROUGH.md`. Phase 1
+  completed 2026-11-17.
+- Mobile app-mode (PoE OS Phase 2, started 2026-11-17) —
+  `mobile/`: the light-duty phone apps of the adopted model
+  (the Manual's light node: it verifies, it does not
+  register). Android: the poe-mobile Rust core cross-compiled
+  to `libpoe_mobile.so` with UniFFI Kotlin bindings and a
+  native identity app, packaged as a signed debug APK on this
+  build host by a manual pipeline (`mobile/android/
+  build-manual.sh`) because the sandbox blocks Gradle's
+  loopback; the Gradle project is in the tree for normal
+  build machines. iOS: Swift bindings generated and the app
+  sources written; assembling and compiling them needs the
+  owner's Mac (Xcode + Apple Developer account). Both apps
+  are v1 identity cores — generate/restore the device key,
+  show the machine id, sign/verify self-test; key custody
+  behind the platform key stores and the design note's
+  containers/detection/certificates are later Phase 2 work,
+  stated plainly in `mobile/README.md`.
 
 ## Step 12 — genesis, devnet, and the public testnet (12c, live)
 
