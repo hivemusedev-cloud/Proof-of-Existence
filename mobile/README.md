@@ -22,8 +22,10 @@ the same machine (1604234391729841426) was restored —
 proving the Keystore unwrap/restore path end-to-end — and
 a sample container's show at challenge 777 answered the
 precomputed response 86469, recorded as the container's
-first show. The certificate import check on-device is
-still the owner's to run.
+first show; and the sample certificate verified (epoch 0),
+was refused on second import on the chain link, and the
+app reports "Verified through epoch 0" on relaunch — the
+full on-device light-core check is closed.
 
 **Key custody (0.2.0):** the device key no longer sits in
 plaintext files. `KeystoreCustody.kt` wraps it under a
