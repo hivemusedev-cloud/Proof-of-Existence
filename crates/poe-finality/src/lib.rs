@@ -28,6 +28,9 @@ use poe_dag::{Block, BlockId, Dag, DagState};
 use poe_kernel::{ClaimOutcome, Registry, RegistryKind, Spend};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+pub mod cert;
+pub use cert::{verify_certificate, CertError, Certificate};
+
 /// Expected committee size when the active set is larger.
 pub const COMMITTEE_TARGET: u64 = 32;
 

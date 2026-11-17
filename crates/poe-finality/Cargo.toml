@@ -11,3 +11,4 @@ poe-dag = { path = "../poe-dag" }
 
 [dev-dependencies]
 rand = "0.8"
+poe-identity = { path = "../poe-identity" }

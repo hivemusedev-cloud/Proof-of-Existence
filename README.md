@@ -625,6 +625,68 @@ kernel and money rules are again untouched:
     in-circuit Poseidon2 accumulator remains deliberately
     unbuilt ahead of the external ZK review (see the poe-zk
     crate docs).
+26. **Two-caps — CLOSED by the owners' Option A (2026-11-17).**
+    The Step 10 composition proof's design gap (see the Residue
+    section's earlier account) is closed on the owners'
+    decision: machine closes hand the lesser of the two caps,
+    `min (vcap) (kernelCap)`. In the Lean composition workspace
+    the liquidity machine's `Sys.close` now hands
+    `min (vcap …) (kernelCap false …)` — the `false` reading,
+    which bounds both v1 readings — and the tokenomics
+    envelope, including the first-year grant bound of
+    520,200,000,000, is now proved **unconditionally**
+    (`the_composition_envelope`, `the_composition_first_year`);
+    the audited Kernel and Tokenomics files are byte-identical
+    to the originals, and the pre-amendment composition is
+    preserved in the build tree. The oracle-cap envelope is
+    not pursued. In Rust the close path never handed an oracle
+    cap — `poe_epoch::close` hands `cap_p`, whose module part
+    `mod_cap` is the kernelCap analogue — and a battery now
+    pins that for every profile and operating point:
+    `cap_p ≤ mod_cap` and `cap_p ≤ 100,000`, and 0 when no
+    machine is registered.
+27. **Finality certificates (2026-11-17, light-duty design
+    note §4, built on the owners' approval).** At each epoch
+    close the node now emits a portable certificate
+    (`poe_finality::cert`, wire format `POECERT1`): the epoch's
+    state-root chain link, minted total, the Merkle companion
+    root (correction 28), the root-signed announcements, the
+    close round's reveals, and the committee's XMSS votes for
+    the close block. Verification is evidence-only — a light
+    client re-derives the committee from the reveals exactly
+    as the finality engine does (frozen draw denominator,
+    correction 16) and counts the votes itself; it trusts no
+    emitter assertion except the `revoked` set, which is
+    monotone across the chain and cross-checkable between
+    sources. The Lean statement of the verification's
+    soundness (`PoE_Certificates.lean`) reduces to the kernel's
+    Part B quorum intersection, like skip attestation.
+    Boundaries, stated in the module docs: an epoch closed by
+    skip attestation (null close) has no certificate in this
+    shape, and no certificate has been emitted on the live
+    testnet yet — node1 holds at the epoch-209 anchor without
+    a canonical mesh, so emission is proved in the simnet
+    battery (two epochs certify and chain-verify; a tamper
+    battery refuses each mutation for its stated reason), not
+    yet live-observed. Certificates are served locally over
+    the control surface (`cert.latest`, `cert.fetch`).
+28. **Merkle companion root (2026-11-17, light-duty design
+    note §6).** The chained state root yields no per-note
+    path, so `poe_store::merkle` now builds a companion root
+    over three sorted sections of the ledger — births (live
+    notes, keyed by commitment), deaths (spent nullifiers),
+    and machines — each a sorted Merkle tree whose structure
+    proves both inclusion and, by neighbouring leaves,
+    absence. A note is proved live by a births inclusion path
+    for its commitment plus a deaths absence path for its
+    nullifier; a spent nullifier is proved by a deaths
+    inclusion path. The companion root is computed at each
+    epoch close, named in that epoch's certificate
+    (correction 27), and proofs for the close-time ledger are
+    served over the control surface (`note.proof`). Battery:
+    genesis determinism, a spend moving a note from births to
+    deaths (its old proof then fails), tamper refusal, and
+    absence/inclusion at every edge of a populated ledger.
 
 **DAG memory — FIXED (2026-11-15, correction 22).** The finding
 stood at the epoch-209 bundle (33k blocks): ~4.9 GB steady,
@@ -646,9 +708,12 @@ suite to **86/86 tests** (79 workspace + 7 poe-finality,
 including the compaction replay gate, the seed-aware restore
 test, and the anchored-seed test) — see the 2026-11-16 ops
 entry. The liveness mechanism the design was
-missing is implemented in corrections 23–24, testnet profile;
-the two-caps design gap from the Step 10 composition proof
-stands unchanged and is still the authors' decision.
+missing is implemented in corrections 23–24, testnet profile,
+and was adopted for mainnet by the owners on 2026-11-17
+(frozen as the mainnet design; it goes to the external audit
+as part of the design). The two-caps design gap from the
+Step 10 composition proof was closed the same day by the
+owners' Option A — correction 26.
 
 PoE OS Phase 0 item 2 (2026-11-16, the key-vault interface —
 see the `crates/poe-vault` inventory entry above) brings the
@@ -659,6 +724,10 @@ the inventory entry above) brings it to **94/94 tests**
 work (2026-11-16, the OS-keyring vault backend and the
 app-packaging conventions — see the inventory entries above)
 brings it to **98/98 tests** (91 workspace + 7 poe-finality).
+The owners' 2026-11-17 decisions and the builds they directed
+(corrections 26–28: two-caps Option A, finality certificates,
+the Merkle companion root) bring it to **104/104 tests**
+(96 workspace + 8 poe-finality, the scale simnet in release).
 
 ## Residue (not done, not claimed)
 
@@ -680,25 +749,29 @@ machines runs green (`crates/poe-finality/tests/simnet_scale.rs`);
 a Docker simnet was attempted — the daemon runs in this VM, but
 registry pulls are blocked by the sandbox's egress policy and the
 VM's RAM would cap real node containers at ~3 regardless. The
-Step 10 composition proof (Lean): DONE, with a proved design
-gap. The composition layer (`PoE_Composition.lean`, with the
-renewal-act extension files in the build tree; COMPOSITION.md
-there has the full account, compile log and axiom receipts —
-propext/Quot.sound only, no sorry) proves unconditionally for
-the composed liquidity machine: the full liquidity invariant,
-live coin ≤ 10¹⁵, minted = live + burned, the emission-curve
-schedule in the machine's own closes, and pool/escrow solvency.
-It also proves the tokenomics envelope — including the
-first-year grant bound of 520,200,000,000 — only CONDITIONALLY,
-and proves why no stronger statement is available: the
-envelope is stated for histories handing the module cap
-(`kernelCap` ≤ 100,000 always), while the machine's closes hand
-the oracle cap (`vcap` = 400,000,000 on an empty price
-history); the two caps diverge, and the machine's first close
-provably breaks the module discipline. Closing the gap is a
-design step for the authors (hand `min (vcap) (kernelCap)` at
-closes, or prove an envelope for oracle-capped histories) — the
-audited files were not changed to force it.
+Step 10 composition proof (Lean): DONE; its proved design
+gap was closed by the owners' Option A on 2026-11-17
+(correction 26). The composition layer (`PoE_Composition.lean`,
+with the renewal-act extension files in the build tree;
+COMPOSITION.md there has the full account, compile log and
+axiom receipts — propext/Quot.sound only, no sorry) proves
+unconditionally for the composed liquidity machine: the full
+liquidity invariant, live coin ≤ 10¹⁵, minted = live + burned,
+the emission-curve schedule in the machine's own closes, and
+pool/escrow solvency. As originally proved, the tokenomics
+envelope — including the first-year grant bound of
+520,200,000,000 — held only conditionally, for a proved
+reason: the envelope is stated for histories handing the
+module cap (`kernelCap` ≤ 100,000 always), while the machine's
+closes handed the oracle cap (`vcap` = 400,000,000 on an empty
+price history), and the two caps provably diverge. The owners
+chose the first of the two closings the proof offered — hand
+`min (vcap) (kernelCap)` at closes — the composition
+workspace's liquidity machine was amended on that basis (the
+audited Kernel and Tokenomics files are byte-identical to the
+originals), and the envelope and first-year bound are now
+proved unconditionally. The oracle-cap envelope is not
+pursued.
 
 ## Run
 

@@ -190,3 +190,44 @@ fn aggregate_replay_forty_years() {
     );
     assert!(c40 > c10 && c10 > c1, "circulation grows across the decades");
 }
+
+#[test]
+fn the_close_never_hands_the_oracle_cap() {
+    // Two-caps, Option A (owners, 2026-11-17): a close hands at most the
+    // module's cap. The oracle cap (poe-v2's vcap, 400,000,000 on an
+    // empty price history — Lean `the_oracle_cap_at_the_empty_history`)
+    // is a pricing quantity for the gated swap path; it never reaches a
+    // Tick. The epoch close's cap is cap_p = min(mod_cap, gated pot
+    // share): pin, for every profile over a spread of economies, that
+    // the handed cap is at most mod_cap at the same reading, and at most
+    // the genesis ceiling of 100,000 (Lean
+    // `kernelCap_never_exceeds_the_genesis_ceiling`).
+    for p in [
+        Profile::REFERENCE,
+        Profile::SLOW_POT,
+        Profile::LONG_WINDOW,
+        Profile::SLOW_AND_LONG,
+        Profile::USAGE_PACED,
+    ] {
+        for (live, economy, grants) in [
+            (RESERVE, 0, 0), // genesis, sealed reading
+            (RESERVE, RESERVE, 0), // genesis, unsealed reading
+            (300_000_000_000_000, 299_700_000_000_000, 0),
+            (500_000_000_000_000, 500_000_000_000_000, 400_000_000_000),
+            (SMAX, SMAX, 876_671_481_505_195),
+        ] {
+            for n in [1u64, 3, 32, 10_000] {
+                for usage in [0u64, 500, 1000] {
+                    let cap = cap_p(&p, live, economy, grants, n, usage);
+                    assert!(
+                        cap as u128 <= mod_cap(economy, grants, n),
+                        "cap {cap} exceeds the module cap at economy {economy}, grants {grants}, n {n}"
+                    );
+                    assert!(cap <= 100_000, "cap {cap} exceeds the genesis ceiling");
+                }
+            }
+        }
+    }
+    // Zero claimants: no cap, no grant.
+    assert_eq!(cap_p(&Profile::REFERENCE, RESERVE, 0, 0, 0, 1000), 0);
+}

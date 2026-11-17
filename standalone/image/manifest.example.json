@@ -1,0 +1,11 @@
+{
+  "format": "poe-update-1",
+  "image_version": "0.0.0-example",
+  "image_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "counter": 1,
+  "min_node_version": "0.1.0",
+  "signatures": [
+    { "key_id": "owner-1", "signature": "<hex ML-DSA signature over H(\"poe-update-manifest\", canonical body)>" },
+    { "key_id": "owner-2", "signature": "<hex ML-DSA signature over H(\"poe-update-manifest\", canonical body)>" }
+  ]
+}

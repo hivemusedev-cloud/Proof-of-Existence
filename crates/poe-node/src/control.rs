@@ -38,10 +38,18 @@
 //! * **Bridge / Swap** (poe-v2): the genesis curve lives in the
 //!   node process; `v2.state` and `v2.quote` answer from its
 //!   real math. Execution (`v2.swap`, `v2.bridge`) is refused
-//!   with a `gated` error: the V2 gate is closed and the
-//!   two-caps decision is pending with AdminMuse (AskAdmin
-//!   q-b50bcedac227dd454d70955bcd5acdfc). The lanes light up
-//!   when the gates open, not before.
+//!   with a `gated` error: the V2 gate is closed by the owners'
+//!   rule (2026-11-17) until the Stage 2 soak criteria are met
+//!   on a real mesh and reported. The lanes light up when the
+//!   gate opens, not before.
+//! * **Finality certificates** (light-duty addition #1):
+//!   `cert.latest` summarizes the newest epoch certificate the
+//!   node has emitted, and `cert.fetch` returns one epoch's
+//!   certificate in full (hex of its canonical encoding) — the
+//!   portable finality evidence a light client verifies from
+//!   scratch (see poe-finality's `cert` module). Certificates
+//!   are emitted at epoch closes and reloaded from
+//!   `<dir>/certs/` at startup.
 //!
 //! JSON is handled by a small in-module parser/serializer: the
 //! surface's payloads are flat, and the workspace's discipline
@@ -90,6 +98,16 @@ pub struct ControlShared {
     pub wallet_dir: PathBuf,
     /// The V2 genesis curve, for state and quotes.
     pub curve: Curve,
+    /// Finality certificates this node has emitted, by epoch
+    /// (light-duty addition #1). Filled at epoch closes and
+    /// reloaded from `<dir>/certs/` at startup.
+    pub certs: BTreeMap<u64, poe_finality::Certificate>,
+    /// The most recent close's companion state (addition #2):
+    /// (epoch, Merkle companion root, the ledger as that close
+    /// left it), so `note.proof` serves paths against exactly
+    /// the root the epoch's certificate names. Set at closes;
+    /// empty until this process has closed an epoch.
+    pub close_companion: Option<(u64, poe_crypto::hash::H512, Ledger)>,
 }
 
 pub type Shared = Arc<RwLock<ControlShared>>;
@@ -110,6 +128,8 @@ impl ControlShared {
             pending: Vec::new(),
             wallet_dir,
             curve: poe_v2::genesis_curve(),
+            certs: BTreeMap::new(),
+            close_companion: None,
         }))
     }
 
@@ -265,6 +285,33 @@ pub fn serve(_shared: Shared, _sock_path: PathBuf) {
 
 // -- request dispatch ---------------------------------------------------------
 
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn inclusion_json(p: &poe_store::merkle::InclusionProof) -> String {
+    let sibs: Vec<String> = p.siblings.iter().map(|s| format!("\"{}\"", hex(s))).collect();
+    format!(
+        "{{\"index\":{},\"leaf_count\":{},\"siblings\":[{}]}}",
+        p.index,
+        p.leaf_count,
+        sibs.join(",")
+    )
+}
+
+fn absence_json(p: &poe_store::merkle::AbsenceProof) -> String {
+    let side = |e: &Option<(u64, poe_store::merkle::InclusionProof)>| match e {
+        Some((k, pr)) => format!("{{\"key\":{},\"proof\":{}}}", k, inclusion_json(pr)),
+        None => "null".to_string(),
+    };
+    format!(
+        "{{\"leaf_count\":{},\"pred\":{},\"succ\":{}}}",
+        p.leaf_count,
+        side(&p.pred),
+        side(&p.succ)
+    )
+}
+
 fn ok(result: String) -> String {
     format!("{{\"ok\":true,\"result\":{result}}}")
 }
@@ -393,10 +440,73 @@ pub fn handle_line(line: &str, shared: &Shared) -> String {
             };
             ok(format!("{{\"side\":\"{}\",\"in\":{},\"out\":{}}}", esc(side), amount, out))
         }
+        "cert.latest" => {
+            let s = shared.read().expect("control lock");
+            match s.certs.values().next_back() {
+                Some(c) => ok(format!(
+                    "{{\\\"epoch\\\":{},\\\"close_round\\\":{},\\\"close_block\\\":\\\"{}\\\",\\\"state_root\\\":\\\"{}\\\",\\\"companion_root\\\":\\\"{}\\\",\\\"minted\\\":{},\\\"votes\\\":{}}}",
+                    c.epoch,
+                    c.close_round,
+                    hex(&c.close_block),
+                    hex(&c.state_root),
+                    hex(&c.companion_root),
+                    c.minted,
+                    c.votes.len(),
+                )),
+                None => err("no_certificate", "this node has not emitted a certificate yet"),
+            }
+        }
+        "cert.fetch" => {
+            let Some(epoch) = params.get("epoch").and_then(Json::as_u64) else {
+                return err("bad_request", "cert.fetch needs an \\\"epoch\\\" number");
+            };
+            let s = shared.read().expect("control lock");
+            match s.certs.get(&epoch) {
+                Some(c) => ok(format!(
+                    "{{\\\"epoch\\\":{},\\\"cert\\\":\\\"{}\\\"}}",
+                    epoch,
+                    hex(&poe_finality::cert::encode_certificate(c)),
+                )),
+                None => err("no_certificate", &format!("no certificate for epoch {epoch}")),
+            }
+        }
+        "note.proof" => {
+            let Some(cm) = params.get("cm").and_then(Json::as_u64) else {
+                return err("bad_request", "note.proof needs a \\\"cm\\\" number");
+            };
+            let s = shared.read().expect("control lock");
+            let Some((epoch, companion, ledger)) = &s.close_companion else {
+                return err(
+                    "no_close",
+                    "this node has not closed an epoch in this run; note proofs are served from the last close",
+                );
+            };
+            match poe_store::merkle::prove_note(ledger, cm) {
+                Some(p) => ok(format!(
+                    "{{\\\"epoch\\\":{},\\\"companion_root\\\":\\\"{}\\\",\\\"note\\\":{{\\\"cm\\\":{},\\\"nf\\\":{},\\\"asset\\\":{},\\\"value\\\":{},\\\"born\\\":{}}},\\\"births_root\\\":\\\"{}\\\",\\\"deaths_root\\\":\\\"{}\\\",\\\"machines_root\\\":\\\"{}\\\",\\\"births\\\":{},\\\"deaths\\\":{}}}",
+                    epoch,
+                    hex(companion),
+                    p.note.cm,
+                    p.note.nf,
+                    p.note.asset,
+                    p.note.value,
+                    p.note.born,
+                    hex(&p.births_root),
+                    hex(&p.deaths_root),
+                    hex(&p.machines_root),
+                    inclusion_json(&p.births),
+                    absence_json(&p.deaths),
+                )),
+                None => err(
+                    "not_live",
+                    &format!("no live note with cm {cm} at the close of epoch {epoch}"),
+                ),
+            }
+        }
         "v2.swap" | "v2.bridge" => err(
             "gated",
             &format!(
-                "V2 execution is gated: the V2 gate is closed and the two-caps decision is pending with AdminMuse (AskAdmin {V2_GATE_QUESTION}). Quotes are live; the lanes are not."
+                "V2 execution is gated: the gate opens only when the Stage 2 soak criteria are met on a real mesh and reported (owners' rule, 2026-11-17; the question it waited on was AskAdmin {V2_GATE_QUESTION}, since decided). Quotes are live; the lanes are not."
             ),
         ),
         _ => err("unknown_method", &format!("no such method: {method}")),

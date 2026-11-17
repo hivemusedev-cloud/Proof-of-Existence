@@ -2824,6 +2824,7 @@ version = "0.1.0"
 dependencies = [
  "poe-crypto",
  "poe-dag",
+ "poe-identity",
  "poe-kernel",
  "rand 0.8.8",
 ]

@@ -1339,6 +1339,47 @@ impl Node {
             epoch,
             (epoch + 1) * rpe,
         )?;
+        // Finality certificate (light-duty addition #1, 2026-11-17):
+        // package this epoch's finality as portable evidence for
+        // light clients. Emission is best-effort and never blocks a
+        // close: an epoch whose closing round finalized as a null
+        // round has no certificate in this evidence shape, and a
+        // store missing either root simply skips the epoch.
+        if let (Some(prev_root), Some(new_root)) =
+            (self.store.state_root_at(epoch), self.store.state_root_at(epoch + 1))
+        {
+            // The Merkle companion root (addition #2) over the
+            // ledger as this close left it, named in the
+            // certificate beside the state root; the close-time
+            // ledger is kept on the control surface so note
+            // proofs can be served against exactly this root.
+            let companion = poe_store::merkle::companion_root(self.store.ledger());
+            {
+                let mut ctl = self.control.write().expect("control lock");
+                ctl.close_companion = Some((epoch, companion, self.store.ledger().clone()));
+            }
+            if let Some(cert) = self.fin.certificate(
+                epoch,
+                prev_root,
+                new_root,
+                companion,
+                self.store.ledger().minted,
+                &self.announcements,
+            ) {
+                let bytes = poe_finality::cert::encode_certificate(&cert);
+                let cert_dir = dir.join("certs");
+                if std::fs::create_dir_all(&cert_dir).is_ok() {
+                    let _ = std::fs::write(cert_dir.join(format!("cert-{epoch}.bin")), &bytes);
+                }
+                self.control.write().expect("control lock").certs.insert(epoch, cert.clone());
+                println!(
+                    "CERT epoch={epoch} close_round={} votes={} announcements={}",
+                    cert.close_round,
+                    cert.votes.len(),
+                    cert.announcements.len()
+                );
+            }
+        }
         self.last_closed = Some(epoch);
         Ok(true)
     }
@@ -1529,6 +1570,28 @@ pub async fn run_testnet(args: TestnetArgs) -> io::Result<()> {
         ),
         dir.join("wallet"),
     );
+
+    // Reload any finality certificates emitted by earlier runs
+    // (light-duty addition #1), so the control surface can serve
+    // them across restarts. A file that does not decode is not
+    // served: a certificate is evidence, and evidence that does
+    // not decode is not evidence.
+    {
+        let cert_dir = dir.join("certs");
+        if let Ok(entries) = std::fs::read_dir(&cert_dir) {
+            let mut ctl = control.write().expect("control lock");
+            for entry in entries.flatten() {
+                if let Ok(bytes) = std::fs::read(entry.path()) {
+                    if let Some(cert) = poe_finality::cert::decode_certificate(&bytes) {
+                        ctl.certs.insert(cert.epoch, cert);
+                    }
+                }
+            }
+            if !ctl.certs.is_empty() {
+                println!("CERTS reloaded {} certificate(s) from {}", ctl.certs.len(), cert_dir.display());
+            }
+        }
+    }
 
     // Self-attestation under the (public) testnet root.
     let root_sk = hex_decode(ROOT_SK_HEX)

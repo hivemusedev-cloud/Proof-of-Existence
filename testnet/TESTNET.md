@@ -609,3 +609,52 @@ standard way (units reinstalled, node2/node3 left retired,
 finstate toward HOLDing round 3361 on the epoch-209 anchor,
 as before. Railway remains on its fork lineage pending the
 bundle-URL flip (owner's dashboard action, unchanged).
+
+## Operations log — 2026-11-17 (later): owner decisions executed — two-caps closed, certificates + Merkle root built, Phase 3 prepared, audit pack refreshed
+
+The owners settled the five open design questions directly
+(2026-11-17): two-caps Option A; skip attestation adopted for
+mainnet and frozen; the V2 gate stays closed until the Stage 2
+soak criteria are met on a real mesh and reported (the control
+surface's gated refusal now states this rule); the standalone
+image is Debian-derived with owner-held offline 2-of-3
+update-signing keys; the light-duty note approved as scoped,
+authorizing the certificate and Merkle-path builds. AdminMuse
+was notified facts-only via AskAdmin
+(q-34e5b681d37c4fd594566c88e74fe293, delivery verified) and
+acknowledged the decisions as settled the same day.
+
+Built and verified the same day (README corrections 26–28):
+the Lean composition's envelope and first-year bound are now
+unconditional under Option A (audited Kernel/Tokenomics files
+byte-identical; a poe-epoch battery pins the Rust close path);
+finality certificates (poe-finality::cert) are emitted at
+epoch close and verified evidence-only, with a Lean soundness
+statement against Part B quorum intersection; the Merkle
+companion root (poe-store::merkle) names births/deaths/
+machines sections in each certificate and serves note proofs
+over the control surface. Phase 3 was prepared as documents
+plus a repo skeleton (standalone/): sealed Debian-derived
+image, A/B updates under the poe-update-1 manifest, the
+2-of-3 offline key ceremony specified — no key was generated
+or held on this machine, and no image was built. The audit
+engagement pack was refreshed (AUDIT_PACKAGE.md +
+AUDIT_ENGAGEMENT.md) with the bounty figure and sign-off left
+as owner blanks.
+
+Full suite 104/104 (96 workspace + 8 poe-finality, scale
+simnet in release; logs
+~/workspace/poe-build-2026-11-11/test-logs-2026-11-17/).
+node1 redeployed on the new binary (its unit had again been
+wiped by a VM replacement; restored the standard way,
+node2/node3 left retired, 6.5 GB drop-in re-added): KEYS
+backend=file (software stub), machine unchanged
+1123122162023658167, POEFIN4 resume, HOLDing round 3361,
+RSS ~54 MB. Live probes of the new surface, verbatim:
+`cert.latest` → error no_certificate ("this node has not
+emitted a certificate yet"); `note.proof` → error no_close —
+both expected: node1 has closed no epoch in this run, and
+certificate emission remains simnet-proved, not yet
+live-observed, until a canonical peer mesh exists again.
+Railway remains on its fork lineage pending the bundle-URL
+flip (owner's dashboard action, unchanged).

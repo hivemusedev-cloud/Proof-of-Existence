@@ -17,6 +17,11 @@
 //!   the previous root, epoch, minted, live coin, a running births
 //!   accumulator, and set sizes — the commitment the storage challenge
 //!   answers from;
+//! * the **Merkle companion root** ([`merkle`], light-duty addition #2):
+//!   a sorted Merkle tree over the live notes, the spent nullifiers, and
+//!   the machine registry, computed per close and named in the epoch's
+//!   finality certificate — per-note inclusion paths and nullifier
+//!   absence proofs the flat state root cannot give;
 //! * pruning support: [`Store::prune_and_snapshot`] swaps the ledger for
 //!   its `pruned()` form; the state-root chain is untouched by pruning, so
 //!   roots stay comparable between pruned and full nodes;
@@ -24,6 +29,7 @@
 
 pub mod encode;
 pub mod filter;
+pub mod merkle;
 
 use encode::{decode_ledger, decode_op, encode_ledger, encode_op, Reader, Writer};
 use poe_crypto::hash::{h, Part, H512};

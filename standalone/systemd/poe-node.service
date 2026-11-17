@@ -1,0 +1,35 @@
+# PoE node — standalone mode (system service).
+#
+# The system-mode counterpart of the app-mode user unit that
+# `poe-node service-unit` prints (see APP_PACKAGING.md): same
+# command line, same restart discipline (finstate -> bundle ->
+# refuse makes restarts safe), running as the dedicated poe
+# user with its data on the eMMC/NVMe data partition (flag 2).
+#
+# Readiness is the control endpoint answering `status`
+# (/data/poe-node/control.sock, local only) — the update
+# agent's health check and any shell both read state there,
+# never from this unit's logs.
+[Unit]
+Description=PoE node (suite service, standalone)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=poe
+Group=poe
+ExecStart=/usr/lib/poe/poe-node testnet --dir /data/poe-node
+# The standalone vault backend (secure element, preparation
+# document section 5) lands with the Phase 3 build; its
+# selection line is enabled then, in the same form app-mode
+# uses:
+# Environment=POE_VAULT=secure-element
+Restart=on-failure
+RestartSec=5
+ProtectSystem=strict
+ReadWritePaths=/data/poe-node
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -17,6 +17,20 @@
 //!   can only lower the grant, never raise it — the kernel still applies
 //!   its own pot/GMAX on top.
 //!
+//! **Two-caps (Option A — owners' decision, 2026-11-17).** The Lean
+//! composition found the liquidity machine's closes handing the oracle
+//! cap (`poe-v2`'s `vcap` — 400,000,000 on an empty price history) where
+//! the tokenomics envelope is proved for closes handing the module cap
+//! (≤ 100,000 always). The owners' fix: a machine close hands
+//! `min(vcap, kernelCap)`, and the composition's envelope is now proved
+//! unconditional on that basis. This engine is the module side of that
+//! decision — its close hands `cap_p`, the module cap at the launch's
+//! economy reading (`economy_live`: the sealed reading, Lean
+//! `econOf true`, for FairV1 inside its window; the unsealed reading
+//! otherwise), further bounded by the profile's gated pot share. No
+//! oracle cap ever reaches a `Tick` here; the battery
+//! `the_close_never_hands_the_oracle_cap` pins the bound.
+//!
 //! Around the close the engine keeps what the kernel does not: **vesting**
 //! (each grant unlocks 1/50 per heartbeat-credited epoch of its owner),
 //! the **reserve's burn** (Version 1: the sealed reserve leaves the live

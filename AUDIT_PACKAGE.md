@@ -1,10 +1,14 @@
 # Proof of Existence — external audit package
 
-Prepared 2026-11-14 for an external auditor. This document is the
-map: what the code is, how to build and verify it, what has already
-been found (by the operator, by the public testnet, and by an
-independent tester), and where the open questions live. Nothing in
-this package has been audited externally yet — arranging that audit
+Prepared 2026-11-14 for an external auditor; refreshed
+2026-11-17 (the owners settled the open design questions that
+day — two-caps, liveness adoption, the V2 gate rule — and the
+light-duty additions #1/#2 were built; the engagement cover is
+`AUDIT_ENGAGEMENT.md`). This document is the map: what the code
+is, how to build and verify it, what has already been found (by
+the operator, by the public testnet, and by an independent
+tester), and where the open questions live. Nothing in this
+package has been audited externally yet — arranging that audit
 is the owner's step; this package exists so an auditor can start
 cold.
 
@@ -43,7 +47,11 @@ was built per build step and lists every known deviation.
    renewal, validity, the global one-law registry semantics.
 2. `crates/poe-finality` + `crates/poe-dag` — GHOSTDAG ordering,
    committee/proposer ticket draws, vote counting, evidence and
-   revocation, finality.
+   revocation, finality. Since 2026-11-17 also the finality
+   certificates (`poe-finality::cert`, light-duty addition #1):
+   emission at epoch closes and evidence-only verification, with
+   the Lean soundness statement in the extension tree
+   (`PoE_Certificates.lean`).
 3. `crates/poe-crypto` — the hash H (must stay byte-exact against
    the Compute Seed), XMSS (index persistence before signing),
    ML-DSA / ML-KEM wrappers.
@@ -53,9 +61,15 @@ was built per build step and lists every known deviation.
    Poseidon2 accumulator — the review should judge that choice.
 5. `crates/poe-node` (testnet node) — networking, resume/bundle
    state handling, history serving. The site of every
-   implementation bug found so far (below).
+   implementation bug found so far (below). The local control
+   surface (no network listener) now also serves the epoch
+   certificates and note proofs; its dispatch is part of this
+   scope.
 6. `crates/poe-identity`, `poe-epoch`, `poe-wallet`, `poe-msg`,
-   `poe-store`, `poe-compute`, `poe-v2`, `poe-mobile`, `poe-net`,
+   `poe-store` (since 2026-11-17 including `poe-store::merkle`,
+   the Merkle companion root of light-duty addition #2: sorted
+   births/deaths/machines sections, inclusion and absence
+   proofs), `poe-compute`, `poe-v2`, `poe-mobile`, `poe-net`,
    `poe-vault` (key custody behind the KeyVault interface,
    2026-11-16; backends: the FileVault software stub, the
    Secret Service keyring, Windows DPAPI and macOS Keychain —
@@ -66,8 +80,8 @@ was built per build step and lists every known deviation.
 
 ## Design questions
 
-**Liveness — mechanism adopted by the owner 2026-11-15,
-implemented testnet-profile.** A round whose drawn committee
+**Liveness — adopted for mainnet by the owners 2026-11-17,
+frozen as the mainnet design.** A round whose drawn committee
 loses a vote needed for its >2/3 quorum never finalized:
 committees are drawn once, votes are one-time, finality is
 sequential, and the original design had no re-draw, no timeout,
@@ -81,18 +95,29 @@ against the kernel's Part B finality: the two outcomes coexist
 only by naming >1/3 of validators in both supports) before the
 Rust landed. Auditors should audit the mechanism as implemented
 (README corrections 23–24), including the inert-late-attestation
-rule. Formal adoption for mainnet purposes remains the authors'
-decision; everything here is testnet profile.
+rule, **as part of the design** — the 2026-11-17 decision froze
+it (null rounds, no clocks, no re-draw, no threshold decay);
+everything still ships testnet profile until the gates open,
+but the design question is closed.
 
-**Still open (authors' decision): the two-caps gap.** The
-Step 10 composition proof shows the Tokenomics envelope —
-including the first-year grant bound — composes only
-conditionally: machine closes hand the oracle cap (400,000,000
+**Two-caps — CLOSED by the owners 2026-11-17 (Option A).** The
+Step 10 composition proof had shown the Tokenomics envelope —
+including the first-year grant bound — composing only
+conditionally: machine closes handed the oracle cap (400,000,000
 on empty price history) where the envelope assumes the module
-cap (≤ 100,000). Closing it (hand `min (vcap) (kernelCap)` at
-closes, or prove an envelope for oracle-capped histories) is a
-design change, not an audit finding against the code as
-specified.
+cap (≤ 100,000). The owners' fix: closes hand
+`min(vcap, kernelCap)`. In the Lean composition the machine now
+hands `min (vcap hist) (kernelCap false L)` (the unsealed
+reading, proved the smaller of the two), the envelope is proved
+for capped runs via grant monotonicity, and the composition's
+envelope and first-year theorems are **unconditional** (the
+pre-amendment conditional state is preserved in the build
+record; the envelope and every tokenomics number stand exactly
+as published). In the Rust, the epoch close's cap was already
+the module-side `cap_p` and never an oracle cap; a battery now
+pins `cap_p ≤ mod_cap ≤ 100,000` across profiles and economies
+(README correction 26). The oracle-cap envelope was not pursued,
+per the decision.
 
 ## Implementation findings to date (all in the node/finality layer)
 
@@ -197,6 +222,27 @@ issue history rather than trusting this summary, and should look
 for the same classes (arrival-order dependence, resume-state
 assumptions, unbounded recursion) elsewhere.
 
+## Built 2026-11-17 (in scope, unaudited like the rest)
+
+- **Finality certificates** (light-duty addition #1, README
+  correction 27): `poe-finality::cert` + node emission at epoch
+  closes + control-surface serving. The Lean soundness statement
+  (`PoE_Certificates.lean`) is at the kernel's Part B
+  abstraction, like the skip extension's. Stated boundaries in
+  the module docs: no certificate for a null-closed epoch in
+  this evidence shape, and the certificate's `revoked` list is
+  emitter-asserted (monotone across the chain, cross-checkable
+  between sources) — the one field not self-evidencing.
+- **Merkle companion root** (light-duty addition #2, README
+  correction 28): `poe-store::merkle` — sorted sections,
+  inclusion/absence proofs, named in the certificate beside
+  `state_root`; the state root's own formula is unchanged.
+- **Phase 3 (standalone) preparation**: a preparation document
+  and a repo skeleton (`standalone/`) — image architecture, A/B
+  update + signed-manifest rules, the owners' 2-of-3 offline
+  update-key ceremony specification. No image is built and no
+  key exists; the preparation is in scope only as documents.
+
 ## Standing falsifiers
 
 `testnet/BOUNTIES.md` states three public falsifier bounties
@@ -214,3 +260,9 @@ valid claims earn public acknowledgement and fix credit.
   stability in operation and remains closed.
 - The testnet root key is public by design (anyone may
   self-attest a testnet identity); it secures nothing of value.
+- No finality certificate has been emitted on the live testnet
+  yet: node1 holds at the epoch-209 anchor without a canonical
+  peer mesh, so emission is proved on simnet epochs, not
+  observed live. The same applies to note proofs served from a
+  live close.
+- The standalone image is prepared, not built (see above).
