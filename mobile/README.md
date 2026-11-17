@@ -16,8 +16,14 @@ poe-wallet and poe-finality.
 is built and signature-verified (same debug certificate as
 0.1.0/0.2.0, so it installs as an upgrade). The 0.2.0 build
 was verified on the owner's device (identity created under
-Keystore custody, self-test passed); 0.3.0 has not run on
-a device yet — its on-device check is the owner's.
+Keystore custody, self-test passed). 0.3.0 was verified on
+the owner's device on 2026-11-17: installed over 0.2.0,
+the same machine (1604234391729841426) was restored —
+proving the Keystore unwrap/restore path end-to-end — and
+a sample container's show at challenge 777 answered the
+precomputed response 86469, recorded as the container's
+first show. The certificate import check on-device is
+still the owner's to run.
 
 **Key custody (0.2.0):** the device key no longer sits in
 plaintext files. `KeystoreCustody.kt` wraps it under a
