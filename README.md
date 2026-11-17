@@ -815,3 +815,27 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     which this stack does not have yet; and who relays tag
     streams is transport, the owners' fleet question, as
     with certificate transport.
+30. **Windows control pipe hardening** (2026-11-17, from
+    the owner's first real-Windows run of the shell). The
+    node ran correctly — fresh identity, canonical bundle
+    state, HOLDing its round instead of solo-closing — but
+    the shell never reached its control pipe (`connect
+    ENOENT` on every call while the node log already showed
+    the pipe listening). Two weaknesses, both fixed: the
+    node's pipe server treated a failed `CreateNamedPipeW`
+    as fatal to the control thread — so one name collision
+    (e.g. a leftover `poe-node.exe` from an earlier launch
+    still holding the pipe name, `ERROR_PIPE_BUSY`) silently
+    removed the surface for the process's whole life while
+    the node ran on; creation now retries (throttled log)
+    and takes over when the holder exits, and the listening
+    line prints only once an instance exists. And the
+    shell's control client made a single connection attempt
+    per call, so any transient pipe error became a standing
+    "unreachable"; it now retries transient failures
+    (ENOENT/EPIPE/ECONNRESET/ECONNREFUSED/timeout) with a
+    short backoff inside the call's deadline. Verified
+    under Wine: a second node started against a held pipe
+    name logged the busy retry, took the pipe over when the
+    holder was killed, and answered `status` immediately.
+    Shell version 0.1.1 carries both fixes.

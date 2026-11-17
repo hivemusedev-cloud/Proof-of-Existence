@@ -78,7 +78,7 @@ function parseResponse(line) {
   return JSON.parse(safe);
 }
 
-function ctl(method, params = {}, timeoutMs = 15000) {
+function ctlOnce(method, params, attemptTimeoutMs) {
   return new Promise((resolve, reject) => {
     // Node's net module speaks both transports by path: a
     // Unix socket file here, a Windows named pipe
@@ -87,8 +87,10 @@ function ctl(method, params = {}, timeoutMs = 15000) {
     let buf = '';
     const timer = setTimeout(() => {
       conn.destroy();
-      reject(new Error(`control call ${method} timed out`));
-    }, timeoutMs);
+      const e = new Error(`control call ${method} timed out`);
+      e.code = 'POE_CTL_TIMEOUT';
+      reject(e);
+    }, attemptTimeoutMs);
     conn.on('connect', () => {
       conn.write(JSON.stringify({ method, params }) + '\n');
     });
@@ -110,6 +112,33 @@ function ctl(method, params = {}, timeoutMs = 15000) {
       reject(e);
     });
   });
+}
+
+// One control call, hardened 2026-11-17 after a field report: on
+// Windows a connect can fail transiently while the node's pipe
+// instance is between clients or not yet created (ENOENT), or the
+// pipe can break mid-connect (EPIPE/ECONNRESET). A single attempt
+// turned those into a permanent-looking "unreachable" in the UI
+// while the node was healthy. Transient failures now retry with a
+// short backoff until the call's overall deadline; the last error
+// is what surfaces if the deadline passes.
+async function ctl(method, params = {}, timeoutMs = 15000) {
+  const TRANSIENT = new Set(['ENOENT', 'EPIPE', 'ECONNRESET', 'ECONNREFUSED', 'POE_CTL_TIMEOUT']);
+  const deadline = Date.now() + timeoutMs;
+  let lastErr = null;
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw lastErr || new Error(`control call ${method} timed out`);
+    try {
+      return await ctlOnce(method, params, Math.min(remaining, 5000));
+    } catch (e) {
+      lastErr = e;
+      if (!TRANSIENT.has(e.code)) throw e;
+      const left = deadline - Date.now();
+      if (left <= 0) throw e;
+      await new Promise((r) => setTimeout(r, Math.min(600, left)));
+    }
+  }
 }
 
 async function nodeAnswers() {

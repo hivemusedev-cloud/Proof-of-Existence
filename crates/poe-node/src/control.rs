@@ -207,7 +207,20 @@ pub fn serve(shared: Shared, pipe_path: PathBuf) {
         };
         let name: Vec<u16> =
             pipe_path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-        println!("CONTROL listening on {} (local only)", pipe_path.display());
+        // Hardened 2026-11-17 after a field report (HiveDevs' Windows
+        // run): the node logged CONTROL listening and served rounds,
+        // but the shell's pipe connects returned ENOENT throughout —
+        // consistent with this thread having died at pipe creation
+        // (e.g. a leftover poe-node.exe from an earlier launch still
+        // holding the name) while the node itself ran on. Creation
+        // failure is therefore retried, never fatal: if another live
+        // node holds the name, this surface takes over when it exits.
+        // The listening line prints only once a pipe instance actually
+        // exists, so the log no longer claims a surface that is not
+        // there.
+        let boot = std::time::Instant::now();
+        let mut announced = false;
+        let mut last_warn_ms = 0u128;
         loop {
             let handle = unsafe {
                 CreateNamedPipeW(
@@ -222,12 +235,23 @@ pub fn serve(shared: Shared, pipe_path: PathBuf) {
                 )
             };
             if handle == INVALID_HANDLE_VALUE {
-                eprintln!(
-                    "CONTROL surface failed to create {} (error {})",
-                    pipe_path.display(),
-                    unsafe { GetLastError() }
-                );
-                return;
+                let err = unsafe { GetLastError() };
+                let now = boot.elapsed().as_millis();
+                if now >= last_warn_ms {
+                    eprintln!(
+                        "CONTROL pipe {} unavailable (error {}); retrying — \
+                         another poe-node may hold the name",
+                        pipe_path.display(),
+                        err
+                    );
+                    last_warn_ms = now + 30_000;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1000));
+                continue;
+            }
+            if !announced {
+                println!("CONTROL listening on {} (local only)", pipe_path.display());
+                announced = true;
             }
             let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) } != 0
                 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
