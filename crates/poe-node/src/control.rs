@@ -198,26 +198,45 @@ pub fn serve(shared: Shared, pipe_path: PathBuf) {
     std::thread::spawn(move || {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Foundation::{
-            CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE,
+            CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
         };
-        use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile, PIPE_ACCESS_DUPLEX};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FlushFileBuffers, ReadFile, WriteFile, PIPE_ACCESS_DUPLEX,
+        };
         use windows_sys::Win32::System::Pipes::{
             ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
-            PIPE_TYPE_BYTE, PIPE_WAIT,
+            PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
         };
         let name: Vec<u16> =
             pipe_path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
-        // Hardened 2026-11-17 after a field report (HiveDevs' Windows
-        // run): the node logged CONTROL listening and served rounds,
-        // but the shell's pipe connects returned ENOENT throughout —
-        // consistent with this thread having died at pipe creation
-        // (e.g. a leftover poe-node.exe from an earlier launch still
-        // holding the name) while the node itself ran on. Creation
-        // failure is therefore retried, never fatal: if another live
-        // node holds the name, this surface takes over when it exits.
-        // The listening line prints only once a pipe instance actually
-        // exists, so the log no longer claims a surface that is not
-        // there.
+        // Reworked twice on 2026-11-17 from the owner's real-Windows
+        // field reports. The first version served one client at a
+        // time on a single pipe instance and treated a failed
+        // CreateNamedPipeW as fatal; the shell (a Node.js/libuv
+        // client) then saw a permanently unreachable pipe while the
+        // node itself ran fine — a native Win32 client connected
+        // without trouble, so the failure lived in how this server
+        // handled instances and disconnects, not in the name or the
+        // protocol. The standing design, matching how the Unix
+        // listener's backlog behaves:
+        //   - creation failure is retried, never fatal (a leftover
+        //     poe-node.exe holding the name is taken over from when
+        //     it exits), and the listening line prints only once an
+        //     instance actually exists;
+        //   - ConnectNamedPipe blocks in the creating loop, which
+        //     is what paces instance creation: once a client
+        //     connects, the connected instance is handed to a
+        //     worker thread and the loop immediately creates and
+        //     waits on the next instance, so the name always has a
+        //     pending instance — no window where a connect finds
+        //     nothing (ENOENT) or finds every instance busy — and
+        //     instances are never created faster than clients
+        //     arrive (an unpaced create-and-spawn loop exhausts
+        //     handles and threads within seconds; that failure was
+        //     caught in Wine testing the same day);
+        //   - a worker thread flushes the pipe before
+        //     disconnecting, so the response is not discarded
+        //     before an asynchronous client has read it.
         let boot = std::time::Instant::now();
         let mut announced = false;
         let mut last_warn_ms = 0u128;
@@ -227,7 +246,7 @@ pub fn serve(shared: Shared, pipe_path: PathBuf) {
                     name.as_ptr(),
                     PIPE_ACCESS_DUPLEX,
                     PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                    1,
+                    PIPE_UNLIMITED_INSTANCES,
                     65_536,
                     65_536,
                     0,
@@ -253,9 +272,22 @@ pub fn serve(shared: Shared, pipe_path: PathBuf) {
                 println!("CONTROL listening on {} (local only)", pipe_path.display());
                 announced = true;
             }
+            // Block here until a client connects (or has already
+            // connected before the call): this is the pacing that
+            // keeps instance creation at the rate clients arrive.
             let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) } != 0
                 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
-            if connected {
+            if !connected {
+                unsafe {
+                    DisconnectNamedPipe(handle);
+                    CloseHandle(handle);
+                }
+                continue;
+            }
+            let shared_conn = shared.clone();
+            let raw = handle as usize;
+            std::thread::spawn(move || {
+                let handle = raw as HANDLE;
                 let mut buf: Vec<u8> = Vec::new();
                 let mut chunk = [0u8; 4096];
                 loop {
@@ -279,7 +311,7 @@ pub fn serve(shared: Shared, pipe_path: PathBuf) {
                 }
                 let line = String::from_utf8_lossy(&buf).trim().to_string();
                 if !line.is_empty() {
-                    let response = handle_line(&line, &shared);
+                    let response = handle_line(&line, &shared_conn);
                     let mut out = response.into_bytes();
                     out.push(b'\n');
                     let mut written = 0u32;
@@ -291,13 +323,16 @@ pub fn serve(shared: Shared, pipe_path: PathBuf) {
                             &mut written,
                             std::ptr::null_mut(),
                         );
+                        // Do not let DisconnectNamedPipe discard
+                        // a response the client has not read yet.
+                        FlushFileBuffers(handle);
                     }
                 }
-            }
-            unsafe {
-                DisconnectNamedPipe(handle);
-                CloseHandle(handle);
-            }
+                unsafe {
+                    DisconnectNamedPipe(handle);
+                    CloseHandle(handle);
+                }
+            });
         }
     });
 }

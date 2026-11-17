@@ -839,3 +839,23 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     name logged the busy retry, took the pipe over when the
     holder was killed, and answered `status` immediately.
     Shell version 0.1.1 carries both fixes.
+    The owner's 0.1.1 run then isolated the remaining
+    failure precisely: status calls succeeded (Overview
+    populated, service state "running"), but one-shot calls
+    failed with `read EPIPE` — the server was disconnecting
+    before the asynchronous client had read the response,
+    discarding it, and one-instance-at-a-time serving let
+    the shell's own polling collide with user calls. The
+    pipe server was therefore reworked (shell 0.1.2):
+    `ConnectNamedPipe` blocks in the creating loop — the
+    pacing that keeps instance creation at the rate clients
+    arrive (an unpaced create-and-spawn variant exhausted
+    handles within seconds in Wine testing and was caught
+    there) — each connected instance is served by its own
+    worker thread, and a worker calls `FlushFileBuffers`
+    before `DisconnectNamedPipe` so a response is never
+    discarded unread. Before/after under Wine with a real
+    Windows Node.js running the shell's own client code:
+    6/6 calls failed `read EPIPE` before; 8/8 succeed
+    after, including three concurrent calls (status, quote,
+    notes) of the kind that collided in the field.
