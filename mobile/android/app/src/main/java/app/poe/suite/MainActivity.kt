@@ -12,6 +12,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import java.io.File
 import uniffi.poe_mobile.CertSummary
+import uniffi.poe_mobile.DetectionBook
 import uniffi.poe_mobile.DeviceKey
 import uniffi.poe_mobile.LightCoreException
 import uniffi.poe_mobile.WalletContainer
@@ -46,14 +47,24 @@ import uniffi.poe_mobile.verifyTestnetCertificate
  *   its first root from its sync source); the UI says so
  *   rather than glossing it.
  *
+ * 0.4.0 adds detection (design note §5, §11 item 3): the
+ * app holds a detection book — per-contact pairwise
+ * secrets and next counters, wrapped under the same
+ * Keystore custody — and scans a relayed tag stream for
+ * its arrivals. A matched tag advances the contact's
+ * counter, so a settled tag never matches again. In this
+ * test build contacts are added by pasting the secret as
+ * hex (testnet tooling); the product flow establishes the
+ * secret at first contact, inside the app.
+ *
  * Honest limits, as before: custody is at-rest (key and
  * container material are in process memory while the app
  * runs); if the Keystore wrapping key is invalidated the
  * wrapped identity AND containers are unrecoverable by
  * design, and the app says so instead of silently
- * replacing anything. Detection tags and the terminal
- * prover's NFC/BLE transport are not in this build.
- * Testnet experiments only.
+ * replacing anything. The terminal prover's NFC/BLE
+ * transport is not in this build. Testnet experiments
+ * only.
  */
 class MainActivity : Activity() {
 
@@ -63,6 +74,12 @@ class MainActivity : Activity() {
     private lateinit var containerStatus: TextView
     private lateinit var challengeInput: EditText
     private lateinit var certStatus: TextView
+    private var book: DetectionBook? = null
+    private lateinit var detectionStatus: TextView
+    private lateinit var contactNameInput: EditText
+    private lateinit var contactSecretInput: EditText
+    private lateinit var epochFromInput: EditText
+    private lateinit var epochToInput: EditText
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -164,8 +181,57 @@ class MainActivity : Activity() {
         }
         root.addView(certButton)
 
+        // ---- Detection ----
+        root.addView(centered("Detection", 18f))
+        root.addView(
+            centered(
+                "Incoming notes and messages are found by their\n" +
+                    "detection tags. Add a contact's pairwise secret\n" +
+                    "(testnet tooling: pasted as 64 hex characters),\n" +
+                    "then scan a relayed tag stream. The book is held\n" +
+                    "wrapped under the same Keystore custody.",
+            ),
+        )
+        detectionStatus = centered("")
+        root.addView(detectionStatus)
+        contactNameInput = EditText(this).apply {
+            hint = "Contact name"
+            gravity = Gravity.CENTER
+        }
+        root.addView(contactNameInput)
+        contactSecretInput = EditText(this).apply {
+            hint = "Pairwise secret (64 hex characters)"
+            gravity = Gravity.CENTER
+        }
+        root.addView(contactSecretInput)
+        val addContactButton = Button(this).apply {
+            text = "Add contact"
+            setOnClickListener { addContact() }
+        }
+        root.addView(addContactButton)
+        epochFromInput = EditText(this).apply {
+            hint = "From epoch"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            gravity = Gravity.CENTER
+            setText("0")
+        }
+        root.addView(epochFromInput)
+        epochToInput = EditText(this).apply {
+            hint = "To epoch"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            gravity = Gravity.CENTER
+            setText("999")
+        }
+        root.addView(epochToInput)
+        val scanButton = Button(this).apply {
+            text = "Scan tag stream file"
+            setOnClickListener { pickFile(REQ_TAGS) }
+        }
+        root.addView(scanButton)
+
         setContentView(ScrollView(this).apply { addView(root) })
         refreshContainers()
+        loadBook()
     }
 
     private fun showLocked(reason: String) {
@@ -339,6 +405,84 @@ class MainActivity : Activity() {
             "${s.companionRoot.take(32)}…" +
             if (bootstrapped) "\n(First certificate: predecessor taken from the\ncertificate itself — bootstrap.)" else ""
 
+    // ---- Detection ----
+
+    private fun loadBook() {
+        book = when (val outcome = KeystoreCustody.loadData(filesDir, BOOK_NAME)) {
+            is KeystoreCustody.DataOutcome.Loaded ->
+                try {
+                    DetectionBook.fromState(outcome.data)
+                } catch (e: LightCoreException) {
+                    DetectionBook()
+                }
+            else -> DetectionBook()
+        }
+        refreshDetectionStatus("Detection book ready.")
+    }
+
+    private fun persistBook() {
+        val b = book ?: return
+        try {
+            KeystoreCustody.storeData(filesDir, BOOK_NAME, b.exportState())
+        } catch (e: Exception) {
+            detectionStatus.text = "Could not store the detection book: ${e.message}"
+        }
+    }
+
+    private fun refreshDetectionStatus(message: String) {
+        val b = book
+        val lines = StringBuilder(message)
+        if (b == null || b.contacts().isEmpty()) {
+            lines.append("\nNo contacts yet.")
+        } else {
+            for (name in b.contacts()) {
+                lines.append("\n$name — next counter ${b.nextCounter(name)}")
+            }
+        }
+        detectionStatus.text = lines.toString()
+    }
+
+    private fun addContact() {
+        val b = book ?: return
+        val name = contactNameInput.text.toString().trim()
+        val secret = hexToBytes(contactSecretInput.text.toString().trim())
+        if (name.isEmpty() || secret == null || secret.size != 32) {
+            detectionStatus.text =
+                "A contact needs a name and a 32-byte secret (64 hex characters)."
+            return
+        }
+        try {
+            b.addContact(name, secret)
+            persistBook()
+            contactSecretInput.text.clear()
+            refreshDetectionStatus("Contact added.")
+        } catch (e: LightCoreException) {
+            detectionStatus.text = "Add refused: ${e.message}"
+        }
+    }
+
+    private fun scanTagStream(bytes: ByteArray) {
+        val b = book ?: return
+        val from = epochFromInput.text.toString().toULongOrNull() ?: 0uL
+        val to = epochToInput.text.toString().toULongOrNull() ?: 0uL
+        if (to < from) {
+            detectionStatus.text = "The epoch window is empty (to before from)."
+            return
+        }
+        try {
+            val hits = b.scan(bytes, from, to, 64uL)
+            persistBook()
+            val summary = if (hits.isEmpty()) {
+                "No arrivals found in this stream."
+            } else {
+                hits.joinToString("\n") { "Found: ${it.contact} #${it.counter} @ epoch ${it.epoch}" }
+            }
+            refreshDetectionStatus(summary)
+        } catch (e: LightCoreException) {
+            detectionStatus.text = "Scan refused: ${e.message}"
+        }
+    }
+
     // ---- File picking ----
 
     private fun pickFile(request: Int) {
@@ -359,6 +503,7 @@ class MainActivity : Activity() {
         when (requestCode) {
             REQ_CONTAINER -> importContainer(bytes)
             REQ_CERT -> verifyImportedCertificate(bytes)
+            REQ_TAGS -> scanTagStream(bytes)
         }
     }
 
@@ -395,6 +540,8 @@ class MainActivity : Activity() {
     companion object {
         private const val REQ_CONTAINER = 41
         private const val REQ_CERT = 42
+        private const val REQ_TAGS = 43
+        private const val BOOK_NAME = "detection-book"
         private const val CHAIN_FILE = "cert-chain.txt"
     }
 }

@@ -12,9 +12,9 @@ poe-wallet and poe-finality.
 
 ## Android — built here
 
-`android/poe-suite-android-0.3.0.apk` (arm64, minSdk 28)
+`android/poe-suite-android-0.4.0.apk` (arm64, minSdk 28)
 is built and signature-verified (same debug certificate as
-0.1.0/0.2.0, so it installs as an upgrade). The 0.2.0 build
+0.1.0–0.3.0, so it installs as an upgrade). The 0.2.0 build
 was verified on the owner's device (identity created under
 Keystore custody, self-test passed). 0.3.0 was verified on
 the owner's device on 2026-11-17: installed over 0.2.0,
@@ -61,6 +61,25 @@ shows extract the line secret from two challenges exactly
 as the wallet's rule requires, and a simnet epoch's
 certificate verifies through the byte surface while a
 wrong predecessor is refused by name.
+
+**Detection (0.4.0):** the design note's §5, §11 build
+order item 3. The Manual's tag is exact — the epoch in
+clear above 384 bits of H("det", k, i, e) under a pairwise
+secret — and lives in `poe-wallet::detect` with the
+payee-side scanner (expected set built once per scan;
+matches advance the contact's counter, so a settled tag
+never matches again; an invoice's first payment is found
+the same way under its one-time tag seed). The app holds
+the detection book wrapped under the same Keystore
+custody (POEK v2 blob) and scans a relayed tag-stream
+file over an epoch window. In this test build a contact's
+secret is pasted as hex (testnet tooling) — the product
+flow establishes it at first contact inside the app. Not
+built: the first-contact fallback (trial decapsulation
+over the ML-KEM address layer, or a detection service),
+which belongs to the address layer this stack does not
+have yet. 0.4.0 has not run on a device yet; its check is
+the owner's, with a sample contact and tag stream.
 
 Two build routes, same sources:
 
@@ -119,13 +138,12 @@ step. What remains needs Xcode on HiveDevs' Mac:
 - iOS still stores raw key bytes in the app's documents
   (its Keychain/Secure Enclave step comes when the app
   is assembled on a Mac).
-- Detection tags (the design note's §5) are not built
-  yet — they are the next item in §11's order. Finality
-  certificates and Merkle paths, once specified-only,
-  were built 2026-11-17 on the owners' approval (the
-  node's corrections 27–28) and are what the light core
-  above verifies against. Note proofs against a
-  certificate's companion root are served by the node's
-  control surface today; verifying them in the app is a
-  later step, as is the terminal prover's NFC/BLE
-  transport for offline shows.
+- Finality certificates and Merkle paths, once
+  specified-only, were built 2026-11-17 on the owners'
+  approval (the node's corrections 27–28) and are what
+  the light core above verifies against. Detection tags
+  followed the same day (correction 29). Note proofs
+  against a certificate's companion root are served by
+  the node's control surface today; verifying them in
+  the app is a later step, as is the terminal prover's
+  NFC/BLE transport for offline shows.

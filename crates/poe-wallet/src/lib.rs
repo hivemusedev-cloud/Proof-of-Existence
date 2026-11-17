@@ -24,6 +24,14 @@
 //! by policy, detection happens at merge), **slot vouchers** (one-time
 //! claims on service slots), and **1-2-5 splitting** (any amount under
 //! 10⁶ in at most 18 bills, any grant-size amount in at most 27).
+//!
+//! The `detect` module is the wallet's other sense: **detection
+//! tags** (Manual §10/§12), by which it finds its incoming notes
+//! and messages in a relayed tag stream — the epoch in clear
+//! above 384 bits of `H("det", k, i, e)` under a pairwise secret.
+
+pub mod detect;
+pub use detect::{det_tag, invoice_tag, DetectionMatch, DetectionTag, Scanner};
 
 use poe_crypto::hash::{h, Part};
 

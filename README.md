@@ -731,7 +731,8 @@ the Merkle companion root) bring it to **104/104 tests**
 The phone light core (2026-11-17, poe-mobile's `light`
 module: containers + certificate verification, exercised by
 the Android app) brings it to **106/106 tests** (98 workspace
-+ 8 poe-finality).
++ 8 poe-finality). Detection tags (correction 29) bring it
+to **111/111 tests** (103 workspace + 8 poe-finality).
 
 ## Residue (not done, not claimed)
 
@@ -785,3 +786,32 @@ cargo run -p poe-node            # kernel demo
 cargo run -p poe-node -- devnet  # single-node devnet
 cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the testnet
 ```
+
+29. **Detection tags** (light-duty design note §5, §11 item
+    3; 2026-11-17). The Manual's definition is exact (Part
+    M): `detTag(k, i, e) = e·2^384 + H[TAG_DET, k, i, e] mod
+    2^384` — the epoch in clear above 384 bits of hash of
+    the pairwise secret, the counter and the epoch, the
+    hash part clearing 128 against quantum collision search
+    at that width. `poe-wallet::detect` implements it
+    (domain constant as the `"det"` domain string in this
+    codebase's concrete hash, the secret as its 32 bytes):
+    `det_tag`, `invoice_tag` (a first payment found the
+    same way, under the invoice's one-time tag seed at
+    counter 0), the 56-byte wire form whose epoch field is
+    `tagEpoch`, and the payee-side `Scanner` — per-contact
+    secrets and next counters, the expected set built once
+    per scan so each candidate costs one lookup (the
+    batched method the note names, as against trial
+    decapsulation), matches advancing the counter so a
+    settled tag never matches again. `poe-mobile` exposes
+    it as `DetectionBook` (add-only secrets, custody state
+    export/import), and the Android app (0.4.0) holds the
+    book wrapped under its Keystore custody and scans a
+    relayed tag stream. Not built, stated plainly: the
+    first-contact fallback (trial decapsulation over the
+    ML-KEM address layer, or a detection service — the
+    Manual's own alternative) belongs to the address layer,
+    which this stack does not have yet; and who relays tag
+    streams is transport, the owners' fleet question, as
+    with certificate transport.

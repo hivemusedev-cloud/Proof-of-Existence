@@ -515,6 +515,240 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 /**
+ * The phone's detection book (design note §5): the pairwise
+ * secrets it holds with its contacts and each contact's next
+ * expected counter, over poe-wallet's `Scanner`. Secrets are
+ * add-only — no method returns one — and the whole book
+ * exports as opaque state bytes for the platform's custody
+ * store (on Android, a Keystore-wrapped blob).
+ */
+public protocol DetectionBookProtocol : AnyObject {
+    
+    /**
+     * Add (or replace) a contact's 32-byte pairwise secret.
+     */
+    func addContact(name: String, secret: Data) throws 
+    
+    func contacts()  -> [String]
+    
+    /**
+     * The book as custody state bytes (secret material —
+     * store only inside the encrypted custody store).
+     */
+    func exportState()  -> Data
+    
+    func nextCounter(name: String)  -> UInt64?
+    
+    func removeContact(name: String)  -> Bool
+    
+    /**
+     * Scan a candidate tag stream — concatenated 56-byte
+     * tags as relayed — for arrivals in the epoch window
+     * `from_epoch..=to_epoch`. Returns the matches and
+     * advances each matched contact's next counter, so a
+     * settled tag never matches again.
+     */
+    func scan(tagStream: Data, fromEpoch: UInt64, toEpoch: UInt64, lookahead: UInt64) throws  -> [DetectionHit]
+    
+}
+
+/**
+ * The phone's detection book (design note §5): the pairwise
+ * secrets it holds with its contacts and each contact's next
+ * expected counter, over poe-wallet's `Scanner`. Secrets are
+ * add-only — no method returns one — and the whole book
+ * exports as opaque state bytes for the platform's custody
+ * store (on Android, a Keystore-wrapped blob).
+ */
+open class DetectionBook:
+    DetectionBookProtocol {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_poe_mobile_fn_clone_detectionbook(self.pointer, $0) }
+    }
+public convenience init() {
+    let pointer =
+        try! rustCall() {
+    uniffi_poe_mobile_fn_constructor_detectionbook_new($0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_poe_mobile_fn_free_detectionbook(pointer, $0) }
+    }
+
+    
+    /**
+     * Restore a book from custody state bytes.
+     */
+public static func fromState(bytes: Data)throws  -> DetectionBook {
+    return try  FfiConverterTypeDetectionBook.lift(try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_constructor_detectionbook_from_state(
+        FfiConverterData.lower(bytes),$0
+    )
+})
+}
+    
+
+    
+    /**
+     * Add (or replace) a contact's 32-byte pairwise secret.
+     */
+open func addContact(name: String, secret: Data)throws  {try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_method_detectionbook_add_contact(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),
+        FfiConverterData.lower(secret),$0
+    )
+}
+}
+    
+open func contacts() -> [String] {
+    return try!  FfiConverterSequenceString.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_method_detectionbook_contacts(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * The book as custody state bytes (secret material —
+     * store only inside the encrypted custody store).
+     */
+open func exportState() -> Data {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_method_detectionbook_export_state(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func nextCounter(name: String) -> UInt64? {
+    return try!  FfiConverterOptionUInt64.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_method_detectionbook_next_counter(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
+    )
+})
+}
+    
+open func removeContact(name: String) -> Bool {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_method_detectionbook_remove_contact(self.uniffiClonePointer(),
+        FfiConverterString.lower(name),$0
+    )
+})
+}
+    
+    /**
+     * Scan a candidate tag stream — concatenated 56-byte
+     * tags as relayed — for arrivals in the epoch window
+     * `from_epoch..=to_epoch`. Returns the matches and
+     * advances each matched contact's next counter, so a
+     * settled tag never matches again.
+     */
+open func scan(tagStream: Data, fromEpoch: UInt64, toEpoch: UInt64, lookahead: UInt64)throws  -> [DetectionHit] {
+    return try  FfiConverterSequenceTypeDetectionHit.lift(try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_method_detectionbook_scan(self.uniffiClonePointer(),
+        FfiConverterData.lower(tagStream),
+        FfiConverterUInt64.lower(fromEpoch),
+        FfiConverterUInt64.lower(toEpoch),
+        FfiConverterUInt64.lower(lookahead),$0
+    )
+})
+}
+    
+
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDetectionBook: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = DetectionBook
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> DetectionBook {
+        return DetectionBook(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: DetectionBook) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DetectionBook {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: DetectionBook, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDetectionBook_lift(_ pointer: UnsafeMutableRawPointer) throws -> DetectionBook {
+    return try FfiConverterTypeDetectionBook.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDetectionBook_lower(_ value: DetectionBook) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeDetectionBook.lower(value)
+}
+
+
+
+
+/**
  * A device identity key, held by the phone. The keypair never
  * leaves the device except through `secret_key()` — the explicit
  * owner backup path.
@@ -1172,6 +1406,83 @@ public func FfiConverterTypeContainerInfo_lower(_ value: ContainerInfo) -> RustB
 
 
 /**
+ * One arrival found by a scan.
+ */
+public struct DetectionHit {
+    public var contact: String
+    public var counter: UInt64
+    public var epoch: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(contact: String, counter: UInt64, epoch: UInt64) {
+        self.contact = contact
+        self.counter = counter
+        self.epoch = epoch
+    }
+}
+
+
+
+extension DetectionHit: Equatable, Hashable {
+    public static func ==(lhs: DetectionHit, rhs: DetectionHit) -> Bool {
+        if lhs.contact != rhs.contact {
+            return false
+        }
+        if lhs.counter != rhs.counter {
+            return false
+        }
+        if lhs.epoch != rhs.epoch {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(contact)
+        hasher.combine(counter)
+        hasher.combine(epoch)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDetectionHit: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DetectionHit {
+        return
+            try DetectionHit(
+                contact: FfiConverterString.read(from: &buf), 
+                counter: FfiConverterUInt64.read(from: &buf), 
+                epoch: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DetectionHit, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.contact, into: &buf)
+        FfiConverterUInt64.write(value.counter, into: &buf)
+        FfiConverterUInt64.write(value.epoch, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDetectionHit_lift(_ buf: RustBuffer) throws -> DetectionHit {
+    return try FfiConverterTypeDetectionHit.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDetectionHit_lower(_ value: DetectionHit) -> RustBuffer {
+    return FfiConverterTypeDetectionHit.lower(value)
+}
+
+
+/**
  * One offline show, as handed to a terminal: the triple a
  * merchant's policy checks, and two of which (at different
  * challenges) would unmask the coin's line secret — the
@@ -1338,6 +1649,11 @@ public enum LightCoreError {
      */
     case VerificationFailed(reason: String
     )
+    /**
+     * A detection input (secret, tag stream, book state) is malformed.
+     */
+    case BadDetection(reason: String
+    )
 }
 
 
@@ -1361,6 +1677,9 @@ public struct FfiConverterTypeLightCoreError: FfiConverterRustBuffer {
             reason: try FfiConverterString.read(from: &buf)
             )
         case 3: return .VerificationFailed(
+            reason: try FfiConverterString.read(from: &buf)
+            )
+        case 4: return .BadDetection(
             reason: try FfiConverterString.read(from: &buf)
             )
 
@@ -1389,6 +1708,11 @@ public struct FfiConverterTypeLightCoreError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
             FfiConverterString.write(reason, into: &buf)
             
+        
+        case let .BadDetection(reason):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(reason, into: &buf)
+            
         }
     }
 }
@@ -1399,6 +1723,80 @@ extension LightCoreError: Equatable, Hashable {}
 extension LightCoreError: Foundation.LocalizedError {
     public var errorDescription: String? {
         String(reflecting: self)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]
+
+    public static func write(_ value: [String], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterString.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeDetectionHit: FfiConverterRustBuffer {
+    typealias SwiftType = [DetectionHit]
+
+    public static func write(_ value: [DetectionHit], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeDetectionHit.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [DetectionHit] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [DetectionHit]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeDetectionHit.read(from: &buf))
+        }
+        return seq
     }
 }
 
@@ -1532,6 +1930,24 @@ private var initializationResult: InitializationResult = {
     if (uniffi_poe_mobile_checksum_func_verify_testnet_certificate() != 29239) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_poe_mobile_checksum_method_detectionbook_add_contact() != 25552) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_method_detectionbook_contacts() != 11287) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_method_detectionbook_export_state() != 39320) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_method_detectionbook_next_counter() != 44997) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_method_detectionbook_remove_contact() != 51277) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_method_detectionbook_scan() != 57915) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_poe_mobile_checksum_method_devicekey_machine_id() != 43666) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1554,6 +1970,12 @@ private var initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_poe_mobile_checksum_method_walletcontainer_to_bytes() != 19703) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_constructor_detectionbook_from_state() != 51459) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_constructor_detectionbook_new() != 55810) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_poe_mobile_checksum_constructor_devicekey_from_bytes() != 26173) {

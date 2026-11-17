@@ -27,8 +27,8 @@ use std::sync::{Arc, Mutex};
 pub mod light;
 pub use light::{
     certificate_summary, testnet_root_public_key, verify_certificate_bytes,
-    verify_testnet_certificate, CertSummary, ContainerInfo, LightCoreError, ShowInfo,
-    WalletContainer,
+    verify_testnet_certificate, CertSummary, ContainerInfo, DetectionBook, DetectionHit,
+    LightCoreError, ShowInfo, WalletContainer,
 };
 
 uniffi::setup_scaffolding!();

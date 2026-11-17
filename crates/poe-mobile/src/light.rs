@@ -40,6 +40,8 @@ pub enum LightCoreError {
     BadCertificate { reason: String },
     /// The certificate decoded but its evidence does not verify.
     VerificationFailed { reason: String },
+    /// A detection input (secret, tag stream, book state) is malformed.
+    BadDetection { reason: String },
 }
 
 impl std::fmt::Display for LightCoreError {
@@ -51,6 +53,9 @@ impl std::fmt::Display for LightCoreError {
             }
             LightCoreError::VerificationFailed { reason } => {
                 write!(f, "certificate does not verify: {reason}")
+            }
+            LightCoreError::BadDetection { reason } => {
+                write!(f, "bad detection input: {reason}")
             }
         }
     }
@@ -256,6 +261,104 @@ pub fn verify_testnet_certificate(
     verify_certificate_bytes(bytes, testnet_root_public_key(), expected_prev_root)
 }
 
+// -- detection ----------------------------------------------------------------
+
+/// One arrival found by a scan.
+#[derive(Debug, uniffi::Record)]
+pub struct DetectionHit {
+    pub contact: String,
+    pub counter: u64,
+    pub epoch: u64,
+}
+
+/// The phone's detection book (design note §5): the pairwise
+/// secrets it holds with its contacts and each contact's next
+/// expected counter, over poe-wallet's `Scanner`. Secrets are
+/// add-only — no method returns one — and the whole book
+/// exports as opaque state bytes for the platform's custody
+/// store (on Android, a Keystore-wrapped blob).
+#[derive(uniffi::Object)]
+pub struct DetectionBook {
+    inner: Mutex<poe_wallet::Scanner>,
+}
+
+#[uniffi::export]
+impl DetectionBook {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(DetectionBook { inner: Mutex::new(poe_wallet::Scanner::new()) })
+    }
+
+    /// Restore a book from custody state bytes.
+    #[uniffi::constructor]
+    pub fn from_state(bytes: Vec<u8>) -> Result<Arc<Self>, LightCoreError> {
+        let sc = poe_wallet::Scanner::import_state(&bytes).ok_or_else(|| {
+            LightCoreError::BadDetection { reason: "book state does not decode".into() }
+        })?;
+        Ok(Arc::new(DetectionBook { inner: Mutex::new(sc) }))
+    }
+
+    /// The book as custody state bytes (secret material —
+    /// store only inside the encrypted custody store).
+    pub fn export_state(&self) -> Vec<u8> {
+        self.inner.lock().unwrap().export_state()
+    }
+
+    /// Add (or replace) a contact's 32-byte pairwise secret.
+    pub fn add_contact(&self, name: String, secret: Vec<u8>) -> Result<(), LightCoreError> {
+        let secret: [u8; 32] = secret.try_into().map_err(|_| LightCoreError::BadDetection {
+            reason: "a pairwise secret is exactly 32 bytes".into(),
+        })?;
+        self.inner.lock().unwrap().add_contact(&name, secret);
+        Ok(())
+    }
+
+    pub fn remove_contact(&self, name: String) -> bool {
+        self.inner.lock().unwrap().remove_contact(&name)
+    }
+
+    pub fn contacts(&self) -> Vec<String> {
+        self.inner.lock().unwrap().contacts()
+    }
+
+    pub fn next_counter(&self, name: String) -> Option<u64> {
+        self.inner.lock().unwrap().next_counter(&name)
+    }
+
+    /// Scan a candidate tag stream — concatenated 56-byte
+    /// tags as relayed — for arrivals in the epoch window
+    /// `from_epoch..=to_epoch`. Returns the matches and
+    /// advances each matched contact's next counter, so a
+    /// settled tag never matches again.
+    pub fn scan(
+        &self,
+        tag_stream: Vec<u8>,
+        from_epoch: u64,
+        to_epoch: u64,
+        lookahead: u64,
+    ) -> Result<Vec<DetectionHit>, LightCoreError> {
+        if tag_stream.len() % poe_wallet::detect::TAG_BYTES != 0 {
+            return Err(LightCoreError::BadDetection {
+                reason: format!(
+                    "tag stream length {} is not a multiple of {}",
+                    tag_stream.len(),
+                    poe_wallet::detect::TAG_BYTES
+                ),
+            });
+        }
+        let candidates: Vec<poe_wallet::DetectionTag> = tag_stream
+            .chunks_exact(poe_wallet::detect::TAG_BYTES)
+            .map(|c| poe_wallet::DetectionTag::from_bytes(c).expect("chunk is tag-sized"))
+            .collect();
+        let epochs: Vec<u64> = (from_epoch..=to_epoch).collect();
+        let found = self.inner.lock().unwrap().scan(&candidates, &epochs, lookahead);
+        Ok(found
+            .into_iter()
+            .map(|m| DetectionHit { contact: m.contact, counter: m.counter, epoch: m.epoch })
+            .collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,5 +519,34 @@ mod tests {
         ));
         // The embedded testnet root is a full ML-DSA public key.
         assert_eq!(testnet_root_public_key().len(), 2592);
+    }
+
+    #[test]
+    fn detection_book_scans_a_tag_stream_and_persists() {
+        let book = DetectionBook::new();
+        book.add_contact("alice".into(), vec![0xA1u8; 32]).unwrap();
+        assert!(book.add_contact("short".into(), vec![1u8; 8]).is_err());
+        // A relayed stream: noise, then alice's counters 0,1
+        // at epoch 10 and counter 2 at epoch 11.
+        let mut stream = Vec::new();
+        for n in 0..100u64 {
+            stream.extend_from_slice(&poe_wallet::det_tag(&[0x77u8; 32], n, 10).to_bytes());
+        }
+        for (i, e) in [(0u64, 10u64), (1, 10), (2, 11)] {
+            stream.extend_from_slice(&poe_wallet::det_tag(&[0xA1u8; 32], i, e).to_bytes());
+        }
+        let hits = book.scan(stream.clone(), 10, 11, 8).unwrap();
+        assert_eq!(
+            hits.iter().map(|h| (h.counter, h.epoch)).collect::<Vec<_>>(),
+            vec![(0, 10), (1, 10), (2, 11)]
+        );
+        assert_eq!(book.next_counter("alice".into()), Some(3));
+        // Custody round-trip: the restored book does not
+        // re-match settled tags.
+        let restored = DetectionBook::from_state(book.export_state()).unwrap();
+        assert_eq!(restored.next_counter("alice".into()), Some(3));
+        assert!(restored.scan(stream, 10, 11, 8).unwrap().is_empty());
+        // A ragged stream is refused, not truncated.
+        assert!(book.scan(vec![0u8; 10], 10, 11, 8).is_err());
     }
 }

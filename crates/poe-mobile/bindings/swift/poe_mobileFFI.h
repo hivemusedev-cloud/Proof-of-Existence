@@ -251,6 +251,57 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureStr
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CLONE_DETECTIONBOOK
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CLONE_DETECTIONBOOK
+void*_Nonnull uniffi_poe_mobile_fn_clone_detectionbook(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FREE_DETECTIONBOOK
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FREE_DETECTIONBOOK
+void uniffi_poe_mobile_fn_free_detectionbook(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CONSTRUCTOR_DETECTIONBOOK_FROM_STATE
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CONSTRUCTOR_DETECTIONBOOK_FROM_STATE
+void*_Nonnull uniffi_poe_mobile_fn_constructor_detectionbook_from_state(RustBuffer bytes, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CONSTRUCTOR_DETECTIONBOOK_NEW
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CONSTRUCTOR_DETECTIONBOOK_NEW
+void*_Nonnull uniffi_poe_mobile_fn_constructor_detectionbook_new(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_ADD_CONTACT
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_ADD_CONTACT
+void uniffi_poe_mobile_fn_method_detectionbook_add_contact(void*_Nonnull ptr, RustBuffer name, RustBuffer secret, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_CONTACTS
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_CONTACTS
+RustBuffer uniffi_poe_mobile_fn_method_detectionbook_contacts(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_EXPORT_STATE
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_EXPORT_STATE
+RustBuffer uniffi_poe_mobile_fn_method_detectionbook_export_state(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_NEXT_COUNTER
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_NEXT_COUNTER
+RustBuffer uniffi_poe_mobile_fn_method_detectionbook_next_counter(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_REMOVE_CONTACT
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_REMOVE_CONTACT
+int8_t uniffi_poe_mobile_fn_method_detectionbook_remove_contact(void*_Nonnull ptr, RustBuffer name, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_SCAN
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_DETECTIONBOOK_SCAN
+RustBuffer uniffi_poe_mobile_fn_method_detectionbook_scan(void*_Nonnull ptr, RustBuffer tag_stream, uint64_t from_epoch, uint64_t to_epoch, uint64_t lookahead, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CLONE_DEVICEKEY
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CLONE_DEVICEKEY
 void*_Nonnull uniffi_poe_mobile_fn_clone_devicekey(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
@@ -674,6 +725,42 @@ uint16_t uniffi_poe_mobile_checksum_func_verify_testnet_certificate(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_ADD_CONTACT
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_ADD_CONTACT
+uint16_t uniffi_poe_mobile_checksum_method_detectionbook_add_contact(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_CONTACTS
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_CONTACTS
+uint16_t uniffi_poe_mobile_checksum_method_detectionbook_contacts(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_EXPORT_STATE
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_EXPORT_STATE
+uint16_t uniffi_poe_mobile_checksum_method_detectionbook_export_state(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_NEXT_COUNTER
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_NEXT_COUNTER
+uint16_t uniffi_poe_mobile_checksum_method_detectionbook_next_counter(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_REMOVE_CONTACT
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_REMOVE_CONTACT
+uint16_t uniffi_poe_mobile_checksum_method_detectionbook_remove_contact(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_SCAN
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DETECTIONBOOK_SCAN
+uint16_t uniffi_poe_mobile_checksum_method_detectionbook_scan(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DEVICEKEY_MACHINE_ID
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_DEVICEKEY_MACHINE_ID
 uint16_t uniffi_poe_mobile_checksum_method_devicekey_machine_id(void
@@ -719,6 +806,18 @@ uint16_t uniffi_poe_mobile_checksum_method_walletcontainer_show(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_TO_BYTES
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_TO_BYTES
 uint16_t uniffi_poe_mobile_checksum_method_walletcontainer_to_bytes(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_DETECTIONBOOK_FROM_STATE
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_DETECTIONBOOK_FROM_STATE
+uint16_t uniffi_poe_mobile_checksum_constructor_detectionbook_from_state(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_DETECTIONBOOK_NEW
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_DETECTIONBOOK_NEW
+uint16_t uniffi_poe_mobile_checksum_constructor_detectionbook_new(void
     
 );
 #endif
