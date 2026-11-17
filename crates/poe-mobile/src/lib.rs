@@ -15,9 +15,21 @@
 //! (no Swift toolchain in the build environment). The app
 //! scaffolds themselves (Android/iOS projects) are not part of
 //! this crate.
+//!
+//! The light core (2026-11-17, `light` module): Existence
+//! Containers and finality-certificate verification — the
+//! light-duty design note's §11 build-order item 4 — over
+//! poe-wallet and poe-finality.
 
 use poe_crypto::pq::{dsa_verify, DsaKeypair};
 use std::sync::{Arc, Mutex};
+
+pub mod light;
+pub use light::{
+    certificate_summary, testnet_root_public_key, verify_certificate_bytes,
+    verify_testnet_certificate, CertSummary, ContainerInfo, LightCoreError, ShowInfo,
+    WalletContainer,
+};
 
 uniffi::setup_scaffolding!();
 

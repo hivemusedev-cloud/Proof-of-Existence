@@ -2846,7 +2846,10 @@ name = "poe-mobile"
 version = "0.1.0"
 dependencies = [
  "poe-crypto",
+ "poe-dag",
+ "poe-finality",
  "poe-identity",
+ "poe-wallet",
  "rand 0.8.8",
  "uniffi",
 ]

@@ -292,14 +292,70 @@ RustBuffer uniffi_poe_mobile_fn_method_devicekey_secret_key(void*_Nonnull ptr, R
 RustBuffer uniffi_poe_mobile_fn_method_devicekey_sign(void*_Nonnull ptr, RustBuffer message, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CLONE_WALLETCONTAINER
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CLONE_WALLETCONTAINER
+void*_Nonnull uniffi_poe_mobile_fn_clone_walletcontainer(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FREE_WALLETCONTAINER
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FREE_WALLETCONTAINER
+void uniffi_poe_mobile_fn_free_walletcontainer(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CONSTRUCTOR_WALLETCONTAINER_FROM_BYTES
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_CONSTRUCTOR_WALLETCONTAINER_FROM_BYTES
+void*_Nonnull uniffi_poe_mobile_fn_constructor_walletcontainer_from_bytes(RustBuffer bytes, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_WALLETCONTAINER_INFO
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_WALLETCONTAINER_INFO
+RustBuffer uniffi_poe_mobile_fn_method_walletcontainer_info(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_WALLETCONTAINER_RECORDED_SHOWS
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_WALLETCONTAINER_RECORDED_SHOWS
+RustBuffer uniffi_poe_mobile_fn_method_walletcontainer_recorded_shows(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_WALLETCONTAINER_SHOW
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_WALLETCONTAINER_SHOW
+RustBuffer uniffi_poe_mobile_fn_method_walletcontainer_show(void*_Nonnull ptr, uint64_t challenge, uint64_t counterparty, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_WALLETCONTAINER_TO_BYTES
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_METHOD_WALLETCONTAINER_TO_BYTES
+RustBuffer uniffi_poe_mobile_fn_method_walletcontainer_to_bytes(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_CERTIFICATE_SUMMARY
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_CERTIFICATE_SUMMARY
+RustBuffer uniffi_poe_mobile_fn_func_certificate_summary(RustBuffer bytes, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_MACHINE_ID_FOR_PUBLIC_KEY
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_MACHINE_ID_FOR_PUBLIC_KEY
 uint64_t uniffi_poe_mobile_fn_func_machine_id_for_public_key(RustBuffer public_key, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_TESTNET_ROOT_PUBLIC_KEY
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_TESTNET_ROOT_PUBLIC_KEY
+RustBuffer uniffi_poe_mobile_fn_func_testnet_root_public_key(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_CERTIFICATE_BYTES
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_CERTIFICATE_BYTES
+RustBuffer uniffi_poe_mobile_fn_func_verify_certificate_bytes(RustBuffer bytes, RustBuffer root_public_key, RustBuffer expected_prev_root, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_SIGNATURE
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_SIGNATURE
 int8_t uniffi_poe_mobile_fn_func_verify_signature(RustBuffer public_key, RustBuffer message, RustBuffer signature, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_TESTNET_CERTIFICATE
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_TESTNET_CERTIFICATE
+RustBuffer uniffi_poe_mobile_fn_func_verify_testnet_certificate(RustBuffer bytes, RustBuffer expected_prev_root, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_POE_MOBILE_RUSTBUFFER_ALLOC
@@ -582,15 +638,39 @@ void ffi_poe_mobile_rust_future_free_void(uint64_t handle
 void ffi_poe_mobile_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_CERTIFICATE_SUMMARY
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_CERTIFICATE_SUMMARY
+uint16_t uniffi_poe_mobile_checksum_func_certificate_summary(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_MACHINE_ID_FOR_PUBLIC_KEY
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_MACHINE_ID_FOR_PUBLIC_KEY
 uint16_t uniffi_poe_mobile_checksum_func_machine_id_for_public_key(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_TESTNET_ROOT_PUBLIC_KEY
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_TESTNET_ROOT_PUBLIC_KEY
+uint16_t uniffi_poe_mobile_checksum_func_testnet_root_public_key(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_CERTIFICATE_BYTES
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_CERTIFICATE_BYTES
+uint16_t uniffi_poe_mobile_checksum_func_verify_certificate_bytes(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_SIGNATURE
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_SIGNATURE
 uint16_t uniffi_poe_mobile_checksum_func_verify_signature(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_TESTNET_CERTIFICATE
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_TESTNET_CERTIFICATE
+uint16_t uniffi_poe_mobile_checksum_func_verify_testnet_certificate(void
     
 );
 #endif
@@ -618,6 +698,30 @@ uint16_t uniffi_poe_mobile_checksum_method_devicekey_sign(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_INFO
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_INFO
+uint16_t uniffi_poe_mobile_checksum_method_walletcontainer_info(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_RECORDED_SHOWS
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_RECORDED_SHOWS
+uint16_t uniffi_poe_mobile_checksum_method_walletcontainer_recorded_shows(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_SHOW
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_SHOW
+uint16_t uniffi_poe_mobile_checksum_method_walletcontainer_show(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_TO_BYTES
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_METHOD_WALLETCONTAINER_TO_BYTES
+uint16_t uniffi_poe_mobile_checksum_method_walletcontainer_to_bytes(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_DEVICEKEY_FROM_BYTES
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_DEVICEKEY_FROM_BYTES
 uint16_t uniffi_poe_mobile_checksum_constructor_devicekey_from_bytes(void
@@ -627,6 +731,12 @@ uint16_t uniffi_poe_mobile_checksum_constructor_devicekey_from_bytes(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_DEVICEKEY_GENERATE
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_DEVICEKEY_GENERATE
 uint16_t uniffi_poe_mobile_checksum_constructor_devicekey_generate(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_WALLETCONTAINER_FROM_BYTES
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_CONSTRUCTOR_WALLETCONTAINER_FROM_BYTES
+uint16_t uniffi_poe_mobile_checksum_constructor_walletcontainer_from_bytes(void
     
 );
 #endif

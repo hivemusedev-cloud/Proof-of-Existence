@@ -11,4 +11,9 @@ crate-type = ["cdylib", "rlib"]
 uniffi = { version = "0.28", features = ["cli"] }
 poe-crypto = { path = "../poe-crypto" }
 poe-identity = { path = "../poe-identity" }
+poe-wallet = { path = "../poe-wallet" }
+poe-finality = { path = "../poe-finality" }
 rand = "0.8"
+
+[dev-dependencies]
+poe-dag = { path = "../poe-dag" }

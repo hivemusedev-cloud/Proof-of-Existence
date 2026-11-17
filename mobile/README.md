@@ -3,18 +3,21 @@
 The phone is a **light-duty** device in the adopted model:
 a wallet identity that verifies and shows, never a machine
 registration (Manual lines 199/467/667; the light-duty
-design note in `~/workspace/poe-build-2026-11-11/`). Both
-apps are v1 identity cores over the Rust `poe-mobile`
-crate (ML-DSA device key, machine id, signing) through
-UniFFI — the foundation the rest of the light-duty design
-builds on.
+design note in `~/workspace/poe-build-2026-11-11/`). The
+apps are shells over the Rust `poe-mobile` crate through
+UniFFI — the identity core (ML-DSA device key, machine id,
+signing) plus, since 2026-11-17, the light core: Existence
+Containers and finality-certificate verification over
+poe-wallet and poe-finality.
 
 ## Android — built here
 
-`android/poe-suite-android-0.2.0.apk` (arm64, minSdk 28)
-is built and signature-verified. It creates or restores
-the device identity, shows the machine id, and runs a
-sign/verify self-test through the Rust core.
+`android/poe-suite-android-0.3.0.apk` (arm64, minSdk 28)
+is built and signature-verified (same debug certificate as
+0.1.0/0.2.0, so it installs as an upgrade). The 0.2.0 build
+was verified on the owner's device (identity created under
+Keystore custody, self-test passed); 0.3.0 has not run on
+a device yet — its on-device check is the owner's.
 
 **Key custody (0.2.0):** the device key no longer sits in
 plaintext files. `KeystoreCustody.kt` wraps it under a
@@ -27,8 +30,29 @@ A v1 install's plaintext key files are migrated into the
 blob on first launch and deleted. The blob codec is
 tested off-device (`android/tests/CustodyCodecTest.kt`:
 round-trip, random IV, and tamper/truncation/wrong-key
-refusals all pass); the Keystore half itself is exercised
-on a real device — the APK has not run on one yet.
+refusals all pass).
+
+**Light core (0.3.0):** wallet containers and certificate
+verification, the design note's §11 build-order item 4.
+The app imports a coin's 1 KiB Existence Container (the
+`.poec` form the node's control surface exports) and holds
+it wrapped under the same Keystore key (POEK v2 blobs,
+same codec battery); a show at a terminal's challenge is
+computed and recorded by the Rust core — a repeat
+challenge is refused by the container's log — and the
+updated container is re-wrapped after each show. The app
+also imports an epoch's finality certificate (public
+evidence, stored plainly) and verifies it from its
+evidence alone through the Rust core against the pinned
+testnet root; verified certificates chain (each next one
+must name the last verified state root), and for the
+first certificate the predecessor is taken from the
+certificate itself — the §3 bootstrap, labelled as such
+in the UI. The Rust surface is unit-tested: container
+shows extract the line secret from two challenges exactly
+as the wallet's rule requires, and a simnet epoch's
+certificate verifies through the byte surface while a
+wrong predecessor is refused by name.
 
 Two build routes, same sources:
 
@@ -50,7 +74,12 @@ Two build routes, same sources:
 `ios/Bindings/` holds the generated Swift bindings
 (`poe_mobile.swift`, `poe_mobileFFI.h`, modulemap) and
 `ios/App/` the SwiftUI sources mirroring the Android v1.
-What remains needs Xcode on HiveDevs' Mac:
+The bindings were regenerated for the light core
+(2026-11-17), so the Swift surface includes containers
+and certificate verification; the iOS app sources still
+wire the identity core only — the light-core UI wiring
+happens at the Mac assembly, with the Keychain custody
+step. What remains needs Xcode on HiveDevs' Mac:
 
 1. Build the XCFramework from the Rust core:
    `cargo build -p poe-mobile --target aarch64-apple-ios`
@@ -71,10 +100,10 @@ What remains needs Xcode on HiveDevs' Mac:
   signs with it) — the same limit as every OS-store
   backend in this project. If the Keystore wrapping key
   is invalidated (a device credential reset can do this
-  on some devices), the wrapped identity is
-  unrecoverable by design; the app says so and erases
-  only on an explicit user action, never silently
-  replacing the identity. StrongBox depends on the
+  on some devices), the wrapped identity and any held
+  containers are unrecoverable by design; the app says
+  so and erases only on an explicit user action, never
+  silently replacing the identity. StrongBox depends on the
   device having one. The design note's monotonic
   counter is not part of this step — whether the vault
   interface grows a counter verb is an open Phase 2
@@ -82,7 +111,13 @@ What remains needs Xcode on HiveDevs' Mac:
 - iOS still stores raw key bytes in the app's documents
   (its Keychain/Secure Enclave step comes when the app
   is assembled on a Mac).
-- Wallet containers, detection tags, finality
-  certificates and Merkle paths are the design note's
-  protocol additions: specified, unbuilt, and awaiting
-  the owners' review (AdminMuse has the revised note).
+- Detection tags (the design note's §5) are not built
+  yet — they are the next item in §11's order. Finality
+  certificates and Merkle paths, once specified-only,
+  were built 2026-11-17 on the owners' approval (the
+  node's corrections 27–28) and are what the light core
+  above verifies against. Note proofs against a
+  certificate's companion root are served by the node's
+  control surface today; verifying them in the app is a
+  later step, as is the terminal prover's NFC/BLE
+  transport for offline shows.

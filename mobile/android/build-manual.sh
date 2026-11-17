@@ -61,7 +61,7 @@ fi
 "$BT/aapt2" link -o "$BUILD/app-unsigned.apk" -I "$AJ" \
   --manifest "$APP/AndroidManifest.xml" \
   --min-sdk-version 28 --target-sdk-version 34 \
-  --version-code 2 --version-name 0.2.0
+  --version-code 3 --version-name 0.3.0
 cp "$BUILD/dex/classes.dex" "$BUILD/stage/"
 cp "$APP/jniLibs/arm64-v8a/libpoe_mobile.so" "$BUILD/stage/lib/arm64-v8a/"
 cp "$BUILD/jna-aar/jni/arm64-v8a/libjnidispatch.so" "$BUILD/stage/lib/arm64-v8a/"
@@ -73,6 +73,6 @@ cp "$BUILD/jna-aar/jni/arm64-v8a/libjnidispatch.so" "$BUILD/stage/lib/arm64-v8a/
   -dname "CN=PoE Debug,O=PoE,C=BD"
 "$BT/apksigner" sign --ks "$BUILD/debug.keystore" \
   --ks-pass pass:android --key-pass pass:android \
-  --out "$ROOT/android/poe-suite-android-0.2.0.apk" "$BUILD/app-aligned.apk"
-"$BT/apksigner" verify "$ROOT/android/poe-suite-android-0.2.0.apk"
-echo "APK: $ROOT/android/poe-suite-android-0.2.0.apk"
+  --out "$ROOT/android/poe-suite-android-0.3.0.apk" "$BUILD/app-aligned.apk"
+"$BT/apksigner" verify "$ROOT/android/poe-suite-android-0.3.0.apk"
+echo "APK: $ROOT/android/poe-suite-android-0.3.0.apk"

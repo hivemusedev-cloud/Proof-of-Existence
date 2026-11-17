@@ -728,6 +728,10 @@ The owners' 2026-11-17 decisions and the builds they directed
 (corrections 26–28: two-caps Option A, finality certificates,
 the Merkle companion root) bring it to **104/104 tests**
 (96 workspace + 8 poe-finality, the scale simnet in release).
+The phone light core (2026-11-17, poe-mobile's `light`
+module: containers + certificate verification, exercised by
+the Android app) brings it to **106/106 tests** (98 workspace
++ 8 poe-finality).
 
 ## Residue (not done, not claimed)
 

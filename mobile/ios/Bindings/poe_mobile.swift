@@ -399,6 +399,22 @@ fileprivate class UniffiHandleMap<T> {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
+    typealias FfiType = UInt32
+    typealias SwiftType = UInt32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
     typealias FfiType = UInt64
     typealias SwiftType = UInt64
@@ -703,6 +719,546 @@ public func FfiConverterTypeDeviceKey_lower(_ value: DeviceKey) -> UnsafeMutable
 }
 
 
+
+
+/**
+ * A held Existence Container (one coin). Created from the
+ * canonical 1 KiB serialization; `to_bytes` returns it (with the
+ * show log as it now stands) for the app to store under its
+ * platform custody.
+ */
+public protocol WalletContainerProtocol : AnyObject {
+    
+    /**
+     * The container's public summary (no secret material).
+     */
+    func info()  -> ContainerInfo
+    
+    /**
+     * The shows this container has recorded, in order.
+     */
+    func recordedShows()  -> [ShowInfo]
+    
+    /**
+     * Show the coin at `challenge` for `counterparty`, recording
+     * the show in the container's log. Refused if this coin was
+     * already shown at that challenge (the log's rule) or the log
+     * is full. The caller must persist `to_bytes()` afterwards —
+     * an unrecorded show is exactly what the log exists to
+     * prevent.
+     */
+    func show(challenge: UInt64, counterparty: UInt64) throws  -> ShowInfo
+    
+    /**
+     * The canonical 1 KiB serialization, for storage.
+     */
+    func toBytes()  -> Data
+    
+}
+
+/**
+ * A held Existence Container (one coin). Created from the
+ * canonical 1 KiB serialization; `to_bytes` returns it (with the
+ * show log as it now stands) for the app to store under its
+ * platform custody.
+ */
+open class WalletContainer:
+    WalletContainerProtocol {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_poe_mobile_fn_clone_walletcontainer(self.pointer, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_poe_mobile_fn_free_walletcontainer(pointer, $0) }
+    }
+
+    
+    /**
+     * Import a container from its 1 KiB serialization (the
+     * `.poec` form the node's control surface exports). The
+     * checksum inside the format is verified by poe-wallet; a
+     * damaged or forged container is refused.
+     */
+public static func fromBytes(bytes: Data)throws  -> WalletContainer {
+    return try  FfiConverterTypeWalletContainer.lift(try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_constructor_walletcontainer_from_bytes(
+        FfiConverterData.lower(bytes),$0
+    )
+})
+}
+    
+
+    
+    /**
+     * The container's public summary (no secret material).
+     */
+open func info() -> ContainerInfo {
+    return try!  FfiConverterTypeContainerInfo.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_method_walletcontainer_info(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * The shows this container has recorded, in order.
+     */
+open func recordedShows() -> [ShowInfo] {
+    return try!  FfiConverterSequenceTypeShowInfo.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_method_walletcontainer_recorded_shows(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+    /**
+     * Show the coin at `challenge` for `counterparty`, recording
+     * the show in the container's log. Refused if this coin was
+     * already shown at that challenge (the log's rule) or the log
+     * is full. The caller must persist `to_bytes()` afterwards —
+     * an unrecorded show is exactly what the log exists to
+     * prevent.
+     */
+open func show(challenge: UInt64, counterparty: UInt64)throws  -> ShowInfo {
+    return try  FfiConverterTypeShowInfo.lift(try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_method_walletcontainer_show(self.uniffiClonePointer(),
+        FfiConverterUInt64.lower(challenge),
+        FfiConverterUInt64.lower(counterparty),$0
+    )
+})
+}
+    
+    /**
+     * The canonical 1 KiB serialization, for storage.
+     */
+open func toBytes() -> Data {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_method_walletcontainer_to_bytes(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeWalletContainer: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = WalletContainer
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> WalletContainer {
+        return WalletContainer(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: WalletContainer) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> WalletContainer {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: WalletContainer, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWalletContainer_lift(_ pointer: UnsafeMutableRawPointer) throws -> WalletContainer {
+    return try FfiConverterTypeWalletContainer.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeWalletContainer_lower(_ value: WalletContainer) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeWalletContainer.lower(value)
+}
+
+
+/**
+ * A certificate's summary — what the app shows after decoding or
+ * verifying. Roots are lowercase hex (128 chars); `minted` is a
+ * decimal string because it does not fit in a u64.
+ */
+public struct CertSummary {
+    public var epoch: UInt64
+    public var closeRound: UInt64
+    public var minted: String
+    public var prevStateRoot: String
+    public var stateRoot: String
+    public var companionRoot: String
+    public var announcements: UInt32
+    public var reveals: UInt32
+    public var votes: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(epoch: UInt64, closeRound: UInt64, minted: String, prevStateRoot: String, stateRoot: String, companionRoot: String, announcements: UInt32, reveals: UInt32, votes: UInt32) {
+        self.epoch = epoch
+        self.closeRound = closeRound
+        self.minted = minted
+        self.prevStateRoot = prevStateRoot
+        self.stateRoot = stateRoot
+        self.companionRoot = companionRoot
+        self.announcements = announcements
+        self.reveals = reveals
+        self.votes = votes
+    }
+}
+
+
+
+extension CertSummary: Equatable, Hashable {
+    public static func ==(lhs: CertSummary, rhs: CertSummary) -> Bool {
+        if lhs.epoch != rhs.epoch {
+            return false
+        }
+        if lhs.closeRound != rhs.closeRound {
+            return false
+        }
+        if lhs.minted != rhs.minted {
+            return false
+        }
+        if lhs.prevStateRoot != rhs.prevStateRoot {
+            return false
+        }
+        if lhs.stateRoot != rhs.stateRoot {
+            return false
+        }
+        if lhs.companionRoot != rhs.companionRoot {
+            return false
+        }
+        if lhs.announcements != rhs.announcements {
+            return false
+        }
+        if lhs.reveals != rhs.reveals {
+            return false
+        }
+        if lhs.votes != rhs.votes {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(epoch)
+        hasher.combine(closeRound)
+        hasher.combine(minted)
+        hasher.combine(prevStateRoot)
+        hasher.combine(stateRoot)
+        hasher.combine(companionRoot)
+        hasher.combine(announcements)
+        hasher.combine(reveals)
+        hasher.combine(votes)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCertSummary: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CertSummary {
+        return
+            try CertSummary(
+                epoch: FfiConverterUInt64.read(from: &buf), 
+                closeRound: FfiConverterUInt64.read(from: &buf), 
+                minted: FfiConverterString.read(from: &buf), 
+                prevStateRoot: FfiConverterString.read(from: &buf), 
+                stateRoot: FfiConverterString.read(from: &buf), 
+                companionRoot: FfiConverterString.read(from: &buf), 
+                announcements: FfiConverterUInt32.read(from: &buf), 
+                reveals: FfiConverterUInt32.read(from: &buf), 
+                votes: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CertSummary, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.epoch, into: &buf)
+        FfiConverterUInt64.write(value.closeRound, into: &buf)
+        FfiConverterString.write(value.minted, into: &buf)
+        FfiConverterString.write(value.prevStateRoot, into: &buf)
+        FfiConverterString.write(value.stateRoot, into: &buf)
+        FfiConverterString.write(value.companionRoot, into: &buf)
+        FfiConverterUInt32.write(value.announcements, into: &buf)
+        FfiConverterUInt32.write(value.reveals, into: &buf)
+        FfiConverterUInt32.write(value.votes, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCertSummary_lift(_ buf: RustBuffer) throws -> CertSummary {
+    return try FfiConverterTypeCertSummary.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCertSummary_lower(_ value: CertSummary) -> RustBuffer {
+    return FfiConverterTypeCertSummary.lower(value)
+}
+
+
+/**
+ * A container's public summary. Deliberately carries no line
+ * secret and no blind: those never leave the container object.
+ */
+public struct ContainerInfo {
+    public var coin: UInt64
+    public var nf: UInt64
+    public var asset: UInt64
+    public var value: UInt64
+    public var born: UInt64
+    public var owner: UInt64
+    /**
+     * How many shows this container has recorded.
+     */
+    public var showsRecorded: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(coin: UInt64, nf: UInt64, asset: UInt64, value: UInt64, born: UInt64, owner: UInt64, 
+        /**
+         * How many shows this container has recorded.
+         */showsRecorded: UInt32) {
+        self.coin = coin
+        self.nf = nf
+        self.asset = asset
+        self.value = value
+        self.born = born
+        self.owner = owner
+        self.showsRecorded = showsRecorded
+    }
+}
+
+
+
+extension ContainerInfo: Equatable, Hashable {
+    public static func ==(lhs: ContainerInfo, rhs: ContainerInfo) -> Bool {
+        if lhs.coin != rhs.coin {
+            return false
+        }
+        if lhs.nf != rhs.nf {
+            return false
+        }
+        if lhs.asset != rhs.asset {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        if lhs.born != rhs.born {
+            return false
+        }
+        if lhs.owner != rhs.owner {
+            return false
+        }
+        if lhs.showsRecorded != rhs.showsRecorded {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(coin)
+        hasher.combine(nf)
+        hasher.combine(asset)
+        hasher.combine(value)
+        hasher.combine(born)
+        hasher.combine(owner)
+        hasher.combine(showsRecorded)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeContainerInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ContainerInfo {
+        return
+            try ContainerInfo(
+                coin: FfiConverterUInt64.read(from: &buf), 
+                nf: FfiConverterUInt64.read(from: &buf), 
+                asset: FfiConverterUInt64.read(from: &buf), 
+                value: FfiConverterUInt64.read(from: &buf), 
+                born: FfiConverterUInt64.read(from: &buf), 
+                owner: FfiConverterUInt64.read(from: &buf), 
+                showsRecorded: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ContainerInfo, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.coin, into: &buf)
+        FfiConverterUInt64.write(value.nf, into: &buf)
+        FfiConverterUInt64.write(value.asset, into: &buf)
+        FfiConverterUInt64.write(value.value, into: &buf)
+        FfiConverterUInt64.write(value.born, into: &buf)
+        FfiConverterUInt64.write(value.owner, into: &buf)
+        FfiConverterUInt32.write(value.showsRecorded, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContainerInfo_lift(_ buf: RustBuffer) throws -> ContainerInfo {
+    return try FfiConverterTypeContainerInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeContainerInfo_lower(_ value: ContainerInfo) -> RustBuffer {
+    return FfiConverterTypeContainerInfo.lower(value)
+}
+
+
+/**
+ * One offline show, as handed to a terminal: the triple a
+ * merchant's policy checks, and two of which (at different
+ * challenges) would unmask the coin's line secret — the
+ * double-spend evidence.
+ */
+public struct ShowInfo {
+    public var coin: UInt64
+    public var challenge: UInt64
+    public var response: UInt64
+    public var counterparty: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(coin: UInt64, challenge: UInt64, response: UInt64, counterparty: UInt64) {
+        self.coin = coin
+        self.challenge = challenge
+        self.response = response
+        self.counterparty = counterparty
+    }
+}
+
+
+
+extension ShowInfo: Equatable, Hashable {
+    public static func ==(lhs: ShowInfo, rhs: ShowInfo) -> Bool {
+        if lhs.coin != rhs.coin {
+            return false
+        }
+        if lhs.challenge != rhs.challenge {
+            return false
+        }
+        if lhs.response != rhs.response {
+            return false
+        }
+        if lhs.counterparty != rhs.counterparty {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(coin)
+        hasher.combine(challenge)
+        hasher.combine(response)
+        hasher.combine(counterparty)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeShowInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ShowInfo {
+        return
+            try ShowInfo(
+                coin: FfiConverterUInt64.read(from: &buf), 
+                challenge: FfiConverterUInt64.read(from: &buf), 
+                response: FfiConverterUInt64.read(from: &buf), 
+                counterparty: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ShowInfo, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.coin, into: &buf)
+        FfiConverterUInt64.write(value.challenge, into: &buf)
+        FfiConverterUInt64.write(value.response, into: &buf)
+        FfiConverterUInt64.write(value.counterparty, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeShowInfo_lift(_ buf: RustBuffer) throws -> ShowInfo {
+    return try FfiConverterTypeShowInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeShowInfo_lower(_ value: ShowInfo) -> RustBuffer {
+    return FfiConverterTypeShowInfo.lower(value)
+}
+
+
 /**
  * Why a device identity could not be restored from bytes.
  */
@@ -758,6 +1314,131 @@ extension DeviceKeyError: Foundation.LocalizedError {
         String(reflecting: self)
     }
 }
+
+
+/**
+ * Why a light-core call failed.
+ */
+public enum LightCoreError {
+
+    
+    
+    /**
+     * The container bytes are not a valid Existence Container.
+     */
+    case BadContainer(reason: String
+    )
+    /**
+     * The certificate bytes do not decode.
+     */
+    case BadCertificate(reason: String
+    )
+    /**
+     * The certificate decoded but its evidence does not verify.
+     */
+    case VerificationFailed(reason: String
+    )
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLightCoreError: FfiConverterRustBuffer {
+    typealias SwiftType = LightCoreError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LightCoreError {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        
+
+        
+        case 1: return .BadContainer(
+            reason: try FfiConverterString.read(from: &buf)
+            )
+        case 2: return .BadCertificate(
+            reason: try FfiConverterString.read(from: &buf)
+            )
+        case 3: return .VerificationFailed(
+            reason: try FfiConverterString.read(from: &buf)
+            )
+
+         default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: LightCoreError, into buf: inout [UInt8]) {
+        switch value {
+
+        
+
+        
+        
+        case let .BadContainer(reason):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .BadCertificate(reason):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .VerificationFailed(reason):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(reason, into: &buf)
+            
+        }
+    }
+}
+
+
+extension LightCoreError: Equatable, Hashable {}
+
+extension LightCoreError: Foundation.LocalizedError {
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeShowInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [ShowInfo]
+
+    public static func write(_ value: [ShowInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeShowInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ShowInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ShowInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeShowInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+/**
+ * Decode a certificate's summary WITHOUT verifying it. For
+ * display of an untrusted file's claims only — the app must not
+ * present these as verified; `verify_certificate_bytes` is the
+ * verification entry point.
+ */
+public func certificateSummary(bytes: Data)throws  -> CertSummary {
+    return try  FfiConverterTypeCertSummary.lift(try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_func_certificate_summary(
+        FfiConverterData.lower(bytes),$0
+    )
+})
+}
 /**
  * The machine id a public key maps to, without holding the key.
  */
@@ -765,6 +1446,31 @@ public func machineIdForPublicKey(publicKey: Data) -> UInt64 {
     return try!  FfiConverterUInt64.lift(try! rustCall() {
     uniffi_poe_mobile_fn_func_machine_id_for_public_key(
         FfiConverterData.lower(publicKey),$0
+    )
+})
+}
+/**
+ * The poe-testnet-1 attestation root's public key (public by
+ * design; copied verbatim from crates/poe-node/testnet-1.spec).
+ */
+public func testnetRootPublicKey() -> Data {
+    return try!  FfiConverterData.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_func_testnet_root_public_key($0
+    )
+})
+}
+/**
+ * Verify a certificate from its evidence alone, against a
+ * pinned attestation root key and the state root of the last
+ * certificate accepted. On success returns the summary; the
+ * caller chains the next certificate to `summary.state_root`.
+ */
+public func verifyCertificateBytes(bytes: Data, rootPublicKey: Data, expectedPrevRoot: Data)throws  -> CertSummary {
+    return try  FfiConverterTypeCertSummary.lift(try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_func_verify_certificate_bytes(
+        FfiConverterData.lower(bytes),
+        FfiConverterData.lower(rootPublicKey),
+        FfiConverterData.lower(expectedPrevRoot),$0
     )
 })
 }
@@ -778,6 +1484,17 @@ public func verifySignature(publicKey: Data, message: Data, signature: Data) -> 
         FfiConverterData.lower(publicKey),
         FfiConverterData.lower(message),
         FfiConverterData.lower(signature),$0
+    )
+})
+}
+/**
+ * Verify a certificate against the pinned testnet root.
+ */
+public func verifyTestnetCertificate(bytes: Data, expectedPrevRoot: Data)throws  -> CertSummary {
+    return try  FfiConverterTypeCertSummary.lift(try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_func_verify_testnet_certificate(
+        FfiConverterData.lower(bytes),
+        FfiConverterData.lower(expectedPrevRoot),$0
     )
 })
 }
@@ -797,10 +1514,22 @@ private var initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_poe_mobile_checksum_func_certificate_summary() != 47084) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_poe_mobile_checksum_func_machine_id_for_public_key() != 42406) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_poe_mobile_checksum_func_testnet_root_public_key() != 47801) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_func_verify_certificate_bytes() != 55972) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_poe_mobile_checksum_func_verify_signature() != 65506) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_func_verify_testnet_certificate() != 29239) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_poe_mobile_checksum_method_devicekey_machine_id() != 43666) {
@@ -815,10 +1544,25 @@ private var initializationResult: InitializationResult = {
     if (uniffi_poe_mobile_checksum_method_devicekey_sign() != 35240) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_poe_mobile_checksum_method_walletcontainer_info() != 54001) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_method_walletcontainer_recorded_shows() != 14950) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_method_walletcontainer_show() != 48419) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_method_walletcontainer_to_bytes() != 19703) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_poe_mobile_checksum_constructor_devicekey_from_bytes() != 26173) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_poe_mobile_checksum_constructor_devicekey_generate() != 49400) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_constructor_walletcontainer_from_bytes() != 25868) {
         return InitializationResult.apiChecksumMismatch
     }
 

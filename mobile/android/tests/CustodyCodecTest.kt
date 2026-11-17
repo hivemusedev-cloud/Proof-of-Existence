@@ -66,6 +66,32 @@ fun main() {
     expectRefusal("wrong key") {
         KeystoreCustody.unwrapBlob(wrongKey, blob)
     }
+
+    // Generic data codec (v2, the light core's containers):
+    // round-trip at container size, version separation both
+    // ways, and the same tamper refusals.
+    val data = ByteArray(1024) { (it % 253).toByte() }
+    val dblob = KeystoreCustody.wrapData(key, data)
+    check(KeystoreCustody.unwrapData(key, dblob).contentEquals(data)) {
+        "data round-trip mismatch"
+    }
+    println("data round-trip OK (blob ${dblob.size} bytes)")
+    expectRefusal("v1 blob through the data codec") {
+        KeystoreCustody.unwrapData(key, blob)
+    }
+    expectRefusal("v2 blob through the identity codec") {
+        KeystoreCustody.unwrapBlob(key, dblob)
+    }
+    expectRefusal("tampered data ciphertext") {
+        val bad = dblob.copyOf()
+        bad[bad.size - 1] = (bad[bad.size - 1] + 1).toByte()
+        KeystoreCustody.unwrapData(key, bad)
+    }
+    expectRefusal("data blob under the wrong key") {
+        KeystoreCustody.unwrapData(wrongKey, dblob)
+    }
+    println("data codec OK")
+
     println("ALL CUSTODY CODEC TESTS PASSED")
 }
 

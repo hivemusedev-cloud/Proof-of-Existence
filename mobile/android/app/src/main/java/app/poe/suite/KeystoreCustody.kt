@@ -232,6 +232,97 @@ object KeystoreCustody {
         return level
     }
 
+    // ---- Generic wrapped data (the light core's containers,
+    // ---- 2026-11-17): the same wrapping key and blob family,
+    // ---- version byte 2, payload = the raw data. ----
+
+    private const val VERSION_DATA: Byte = 2
+
+    /** Encrypt raw [data] under [key]; output is a POEK v2 blob. */
+    fun wrapData(key: Key, data: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val iv = cipher.iv
+        require(iv.size in 1..255) { "unexpected GCM IV size ${iv.size}" }
+        val ct = cipher.doFinal(data)
+        val out = ByteBuffer.allocate(MAGIC.size + 2 + iv.size + ct.size)
+        out.put(MAGIC)
+        out.put(VERSION_DATA)
+        out.put(iv.size.toByte())
+        out.put(iv)
+        out.put(ct)
+        return out.array()
+    }
+
+    /** Decrypt a POEK v2 blob from [wrapData]. Throws on any defect. */
+    fun unwrapData(key: Key, blob: ByteArray): ByteArray {
+        require(blob.size > MAGIC.size + 2) { "blob too short: ${blob.size} bytes" }
+        require(MAGIC.indices.all { blob[it] == MAGIC[it] }) { "not a POEK blob" }
+        require(blob[MAGIC.size] == VERSION_DATA) {
+            "unsupported blob version ${blob[MAGIC.size]}"
+        }
+        val ivLen = blob[MAGIC.size + 1].toInt() and 0xFF
+        val header = MAGIC.size + 2 + ivLen
+        require(ivLen > 0 && blob.size > header) { "blob truncated in header" }
+        val iv = blob.copyOfRange(MAGIC.size + 2, header)
+        val ct = blob.copyOfRange(header, blob.size)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
+        return cipher.doFinal(ct)
+    }
+
+    sealed interface DataOutcome {
+        data class Loaded(val data: ByteArray, val level: Level) : DataOutcome
+        object Absent : DataOutcome
+        data class Locked(val reason: String) : DataOutcome
+    }
+
+    private fun dataFile(filesDir: File, name: String): File {
+        require(name.isNotEmpty() && name.all { it.isLetterOrDigit() || it in "._-" }) {
+            "bad data name: $name"
+        }
+        return File(filesDir, "$name.wrapped")
+    }
+
+    /** Wrap and store [data] under [name]; returns the custody level. */
+    fun storeData(filesDir: File, name: String, data: ByteArray): Level {
+        val levelFile = File(filesDir, LEVEL_FILE)
+        val (wrapKey, level) = checkNotNull(wrappingKey(levelFile, forExistingBlob = false)) {
+            "wrapping key creation returned nothing"
+        }
+        dataFile(filesDir, name).writeBytes(wrapData(wrapKey, data))
+        return level
+    }
+
+    /** Load the data stored under [name], with the identity's locked semantics. */
+    fun loadData(filesDir: File, name: String): DataOutcome {
+        val file = dataFile(filesDir, name)
+        if (!file.exists()) return DataOutcome.Absent
+        val levelFile = File(filesDir, LEVEL_FILE)
+        val (wrapKey, level) = wrappingKey(levelFile, forExistingBlob = true)
+            ?: return DataOutcome.Locked(
+                "The Keystore unlock key for the stored data is gone; " +
+                    "it cannot be recovered.",
+            )
+        return try {
+            DataOutcome.Loaded(unwrapData(wrapKey, file.readBytes()), level)
+        } catch (e: Exception) {
+            DataOutcome.Locked("The stored data cannot be read: ${e.message}")
+        }
+    }
+
+    fun deleteData(filesDir: File, name: String) {
+        dataFile(filesDir, name).delete()
+    }
+
+    /** Names of all wrapped data items (the identity blob excluded). */
+    fun listData(filesDir: File): List<String> =
+        filesDir.listFiles()
+            ?.filter { it.name.endsWith(".wrapped") && it.name != BLOB_FILE }
+            ?.map { it.name.removeSuffix(".wrapped") }
+            ?.sorted()
+            ?: emptyList()
+
     /**
      * Delete the wrapped identity, any legacy plaintext, and
      * the Keystore wrapping key. Only ever called from the
@@ -239,6 +330,9 @@ object KeystoreCustody {
      */
     fun eraseIdentity(filesDir: File) {
         File(filesDir, BLOB_FILE).delete()
+        // Wrapped data items share the identity's unlock key;
+        // erasing the key strands them, so they go with it.
+        listData(filesDir).forEach { deleteData(filesDir, it) }
         File(filesDir, LEVEL_FILE).delete()
         File(filesDir, LEGACY_PK).delete()
         File(filesDir, LEGACY_SK).delete()

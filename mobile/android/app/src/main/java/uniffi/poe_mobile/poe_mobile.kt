@@ -730,6 +730,26 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -765,10 +785,32 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_poe_mobile_fn_method_devicekey_sign(`ptr`: Pointer,`message`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_poe_mobile_fn_clone_walletcontainer(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
+    fun uniffi_poe_mobile_fn_free_walletcontainer(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_poe_mobile_fn_constructor_walletcontainer_from_bytes(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Pointer
+    fun uniffi_poe_mobile_fn_method_walletcontainer_info(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_poe_mobile_fn_method_walletcontainer_recorded_shows(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_poe_mobile_fn_method_walletcontainer_show(`ptr`: Pointer,`challenge`: Long,`counterparty`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_poe_mobile_fn_method_walletcontainer_to_bytes(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_poe_mobile_fn_func_certificate_summary(`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_poe_mobile_fn_func_machine_id_for_public_key(`publicKey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
+    fun uniffi_poe_mobile_fn_func_testnet_root_public_key(uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_poe_mobile_fn_func_verify_certificate_bytes(`bytes`: RustBuffer.ByValue,`rootPublicKey`: RustBuffer.ByValue,`expectedPrevRoot`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_poe_mobile_fn_func_verify_signature(`publicKey`: RustBuffer.ByValue,`message`: RustBuffer.ByValue,`signature`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_poe_mobile_fn_func_verify_testnet_certificate(`bytes`: RustBuffer.ByValue,`expectedPrevRoot`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun ffi_poe_mobile_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_poe_mobile_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -881,9 +923,17 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_poe_mobile_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_poe_mobile_checksum_func_certificate_summary(
+    ): Short
     fun uniffi_poe_mobile_checksum_func_machine_id_for_public_key(
     ): Short
+    fun uniffi_poe_mobile_checksum_func_testnet_root_public_key(
+    ): Short
+    fun uniffi_poe_mobile_checksum_func_verify_certificate_bytes(
+    ): Short
     fun uniffi_poe_mobile_checksum_func_verify_signature(
+    ): Short
+    fun uniffi_poe_mobile_checksum_func_verify_testnet_certificate(
     ): Short
     fun uniffi_poe_mobile_checksum_method_devicekey_machine_id(
     ): Short
@@ -893,9 +943,19 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_poe_mobile_checksum_method_devicekey_sign(
     ): Short
+    fun uniffi_poe_mobile_checksum_method_walletcontainer_info(
+    ): Short
+    fun uniffi_poe_mobile_checksum_method_walletcontainer_recorded_shows(
+    ): Short
+    fun uniffi_poe_mobile_checksum_method_walletcontainer_show(
+    ): Short
+    fun uniffi_poe_mobile_checksum_method_walletcontainer_to_bytes(
+    ): Short
     fun uniffi_poe_mobile_checksum_constructor_devicekey_from_bytes(
     ): Short
     fun uniffi_poe_mobile_checksum_constructor_devicekey_generate(
+    ): Short
+    fun uniffi_poe_mobile_checksum_constructor_walletcontainer_from_bytes(
     ): Short
     fun ffi_poe_mobile_uniffi_contract_version(
     ): Int
@@ -914,10 +974,22 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_poe_mobile_checksum_func_certificate_summary() != 47084.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_poe_mobile_checksum_func_machine_id_for_public_key() != 42406.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_poe_mobile_checksum_func_testnet_root_public_key() != 47801.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_poe_mobile_checksum_func_verify_certificate_bytes() != 55972.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_poe_mobile_checksum_func_verify_signature() != 65506.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_poe_mobile_checksum_func_verify_testnet_certificate() != 29239.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_poe_mobile_checksum_method_devicekey_machine_id() != 43666.toShort()) {
@@ -932,10 +1004,25 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_poe_mobile_checksum_method_devicekey_sign() != 35240.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_poe_mobile_checksum_method_walletcontainer_info() != 54001.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_poe_mobile_checksum_method_walletcontainer_recorded_shows() != 14950.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_poe_mobile_checksum_method_walletcontainer_show() != 48419.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_poe_mobile_checksum_method_walletcontainer_to_bytes() != 19703.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_poe_mobile_checksum_constructor_devicekey_from_bytes() != 26173.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_poe_mobile_checksum_constructor_devicekey_generate() != 49400.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_poe_mobile_checksum_constructor_walletcontainer_from_bytes() != 25868.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -984,6 +1071,29 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
  * @suppress
  * */
 object NoPointer
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
 
 /**
  * @suppress
@@ -1513,6 +1623,518 @@ public object FfiConverterTypeDeviceKey: FfiConverter<DeviceKey, Pointer> {
 }
 
 
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+/**
+ * A held Existence Container (one coin). Created from the
+ * canonical 1 KiB serialization; `to_bytes` returns it (with the
+ * show log as it now stands) for the app to store under its
+ * platform custody.
+ */
+public interface WalletContainerInterface {
+    
+    /**
+     * The container's public summary (no secret material).
+     */
+    fun `info`(): ContainerInfo
+    
+    /**
+     * The shows this container has recorded, in order.
+     */
+    fun `recordedShows`(): List<ShowInfo>
+    
+    /**
+     * Show the coin at `challenge` for `counterparty`, recording
+     * the show in the container's log. Refused if this coin was
+     * already shown at that challenge (the log's rule) or the log
+     * is full. The caller must persist `to_bytes()` afterwards —
+     * an unrecorded show is exactly what the log exists to
+     * prevent.
+     */
+    fun `show`(`challenge`: kotlin.ULong, `counterparty`: kotlin.ULong): ShowInfo
+    
+    /**
+     * The canonical 1 KiB serialization, for storage.
+     */
+    fun `toBytes`(): kotlin.ByteArray
+    
+    companion object
+}
+
+/**
+ * A held Existence Container (one coin). Created from the
+ * canonical 1 KiB serialization; `to_bytes` returns it (with the
+ * show log as it now stands) for the app to store under its
+ * platform custody.
+ */
+open class WalletContainer: Disposable, AutoCloseable, WalletContainerInterface {
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_free_walletcontainer(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_poe_mobile_fn_clone_walletcontainer(pointer!!, status)
+        }
+    }
+
+    
+    /**
+     * The container's public summary (no secret material).
+     */override fun `info`(): ContainerInfo {
+            return FfiConverterTypeContainerInfo.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_method_walletcontainer_info(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The shows this container has recorded, in order.
+     */override fun `recordedShows`(): List<ShowInfo> {
+            return FfiConverterSequenceTypeShowInfo.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_method_walletcontainer_recorded_shows(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Show the coin at `challenge` for `counterparty`, recording
+     * the show in the container's log. Refused if this coin was
+     * already shown at that challenge (the log's rule) or the log
+     * is full. The caller must persist `to_bytes()` afterwards —
+     * an unrecorded show is exactly what the log exists to
+     * prevent.
+     */
+    @Throws(LightCoreException::class)override fun `show`(`challenge`: kotlin.ULong, `counterparty`: kotlin.ULong): ShowInfo {
+            return FfiConverterTypeShowInfo.lift(
+    callWithPointer {
+    uniffiRustCallWithError(LightCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_method_walletcontainer_show(
+        it, FfiConverterULong.lower(`challenge`),FfiConverterULong.lower(`counterparty`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * The canonical 1 KiB serialization, for storage.
+     */override fun `toBytes`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_method_walletcontainer_to_bytes(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+    companion object {
+        
+    /**
+     * Import a container from its 1 KiB serialization (the
+     * `.poec` form the node's control surface exports). The
+     * checksum inside the format is verified by poe-wallet; a
+     * damaged or forged container is refused.
+     */
+    @Throws(LightCoreException::class) fun `fromBytes`(`bytes`: kotlin.ByteArray): WalletContainer {
+            return FfiConverterTypeWalletContainer.lift(
+    uniffiRustCallWithError(LightCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_constructor_walletcontainer_from_bytes(
+        FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+    
+
+        
+    }
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeWalletContainer: FfiConverter<WalletContainer, Pointer> {
+
+    override fun lower(value: WalletContainer): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): WalletContainer {
+        return WalletContainer(value)
+    }
+
+    override fun read(buf: ByteBuffer): WalletContainer {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: WalletContainer) = 8UL
+
+    override fun write(value: WalletContainer, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+
+/**
+ * A certificate's summary — what the app shows after decoding or
+ * verifying. Roots are lowercase hex (128 chars); `minted` is a
+ * decimal string because it does not fit in a u64.
+ */
+data class CertSummary (
+    var `epoch`: kotlin.ULong, 
+    var `closeRound`: kotlin.ULong, 
+    var `minted`: kotlin.String, 
+    var `prevStateRoot`: kotlin.String, 
+    var `stateRoot`: kotlin.String, 
+    var `companionRoot`: kotlin.String, 
+    var `announcements`: kotlin.UInt, 
+    var `reveals`: kotlin.UInt, 
+    var `votes`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeCertSummary: FfiConverterRustBuffer<CertSummary> {
+    override fun read(buf: ByteBuffer): CertSummary {
+        return CertSummary(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: CertSummary) = (
+            FfiConverterULong.allocationSize(value.`epoch`) +
+            FfiConverterULong.allocationSize(value.`closeRound`) +
+            FfiConverterString.allocationSize(value.`minted`) +
+            FfiConverterString.allocationSize(value.`prevStateRoot`) +
+            FfiConverterString.allocationSize(value.`stateRoot`) +
+            FfiConverterString.allocationSize(value.`companionRoot`) +
+            FfiConverterUInt.allocationSize(value.`announcements`) +
+            FfiConverterUInt.allocationSize(value.`reveals`) +
+            FfiConverterUInt.allocationSize(value.`votes`)
+    )
+
+    override fun write(value: CertSummary, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`epoch`, buf)
+            FfiConverterULong.write(value.`closeRound`, buf)
+            FfiConverterString.write(value.`minted`, buf)
+            FfiConverterString.write(value.`prevStateRoot`, buf)
+            FfiConverterString.write(value.`stateRoot`, buf)
+            FfiConverterString.write(value.`companionRoot`, buf)
+            FfiConverterUInt.write(value.`announcements`, buf)
+            FfiConverterUInt.write(value.`reveals`, buf)
+            FfiConverterUInt.write(value.`votes`, buf)
+    }
+}
+
+
+
+/**
+ * A container's public summary. Deliberately carries no line
+ * secret and no blind: those never leave the container object.
+ */
+data class ContainerInfo (
+    var `coin`: kotlin.ULong, 
+    var `nf`: kotlin.ULong, 
+    var `asset`: kotlin.ULong, 
+    var `value`: kotlin.ULong, 
+    var `born`: kotlin.ULong, 
+    var `owner`: kotlin.ULong, 
+    /**
+     * How many shows this container has recorded.
+     */
+    var `showsRecorded`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeContainerInfo: FfiConverterRustBuffer<ContainerInfo> {
+    override fun read(buf: ByteBuffer): ContainerInfo {
+        return ContainerInfo(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ContainerInfo) = (
+            FfiConverterULong.allocationSize(value.`coin`) +
+            FfiConverterULong.allocationSize(value.`nf`) +
+            FfiConverterULong.allocationSize(value.`asset`) +
+            FfiConverterULong.allocationSize(value.`value`) +
+            FfiConverterULong.allocationSize(value.`born`) +
+            FfiConverterULong.allocationSize(value.`owner`) +
+            FfiConverterUInt.allocationSize(value.`showsRecorded`)
+    )
+
+    override fun write(value: ContainerInfo, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`coin`, buf)
+            FfiConverterULong.write(value.`nf`, buf)
+            FfiConverterULong.write(value.`asset`, buf)
+            FfiConverterULong.write(value.`value`, buf)
+            FfiConverterULong.write(value.`born`, buf)
+            FfiConverterULong.write(value.`owner`, buf)
+            FfiConverterUInt.write(value.`showsRecorded`, buf)
+    }
+}
+
+
+
+/**
+ * One offline show, as handed to a terminal: the triple a
+ * merchant's policy checks, and two of which (at different
+ * challenges) would unmask the coin's line secret — the
+ * double-spend evidence.
+ */
+data class ShowInfo (
+    var `coin`: kotlin.ULong, 
+    var `challenge`: kotlin.ULong, 
+    var `response`: kotlin.ULong, 
+    var `counterparty`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeShowInfo: FfiConverterRustBuffer<ShowInfo> {
+    override fun read(buf: ByteBuffer): ShowInfo {
+        return ShowInfo(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ShowInfo) = (
+            FfiConverterULong.allocationSize(value.`coin`) +
+            FfiConverterULong.allocationSize(value.`challenge`) +
+            FfiConverterULong.allocationSize(value.`response`) +
+            FfiConverterULong.allocationSize(value.`counterparty`)
+    )
+
+    override fun write(value: ShowInfo, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`coin`, buf)
+            FfiConverterULong.write(value.`challenge`, buf)
+            FfiConverterULong.write(value.`response`, buf)
+            FfiConverterULong.write(value.`counterparty`, buf)
+    }
+}
+
+
 
 
 
@@ -1570,6 +2192,163 @@ public object FfiConverterTypeDeviceKeyError : FfiConverterRustBuffer<DeviceKeyE
     }
 
 }
+
+
+
+
+
+/**
+ * Why a light-core call failed.
+ */
+sealed class LightCoreException: kotlin.Exception() {
+    
+    /**
+     * The container bytes are not a valid Existence Container.
+     */
+    class BadContainer(
+        
+        val `reason`: kotlin.String
+        ) : LightCoreException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+    /**
+     * The certificate bytes do not decode.
+     */
+    class BadCertificate(
+        
+        val `reason`: kotlin.String
+        ) : LightCoreException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+    /**
+     * The certificate decoded but its evidence does not verify.
+     */
+    class VerificationFailed(
+        
+        val `reason`: kotlin.String
+        ) : LightCoreException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<LightCoreException> {
+        override fun lift(error_buf: RustBuffer.ByValue): LightCoreException = FfiConverterTypeLightCoreError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeLightCoreError : FfiConverterRustBuffer<LightCoreException> {
+    override fun read(buf: ByteBuffer): LightCoreException {
+        
+
+        return when(buf.getInt()) {
+            1 -> LightCoreException.BadContainer(
+                FfiConverterString.read(buf),
+                )
+            2 -> LightCoreException.BadCertificate(
+                FfiConverterString.read(buf),
+                )
+            3 -> LightCoreException.VerificationFailed(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: LightCoreException): ULong {
+        return when(value) {
+            is LightCoreException.BadContainer -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+            is LightCoreException.BadCertificate -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+            is LightCoreException.VerificationFailed -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+    }
+
+    override fun write(value: LightCoreException, buf: ByteBuffer) {
+        when(value) {
+            is LightCoreException.BadContainer -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is LightCoreException.BadCertificate -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is LightCoreException.VerificationFailed -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeShowInfo: FfiConverterRustBuffer<List<ShowInfo>> {
+    override fun read(buf: ByteBuffer): List<ShowInfo> {
+        val len = buf.getInt()
+        return List<ShowInfo>(len) {
+            FfiConverterTypeShowInfo.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ShowInfo>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeShowInfo.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ShowInfo>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeShowInfo.write(it, buf)
+        }
+    }
+}
+        /**
+         * Decode a certificate's summary WITHOUT verifying it. For
+         * display of an untrusted file's claims only — the app must not
+         * present these as verified; `verify_certificate_bytes` is the
+         * verification entry point.
+         */
+    @Throws(LightCoreException::class) fun `certificateSummary`(`bytes`: kotlin.ByteArray): CertSummary {
+            return FfiConverterTypeCertSummary.lift(
+    uniffiRustCallWithError(LightCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_func_certificate_summary(
+        FfiConverterByteArray.lower(`bytes`),_status)
+}
+    )
+    }
+    
+
         /**
          * The machine id a public key maps to, without holding the key.
          */ fun `machineIdForPublicKey`(`publicKey`: kotlin.ByteArray): kotlin.ULong {
@@ -1583,6 +2362,35 @@ public object FfiConverterTypeDeviceKeyError : FfiConverterRustBuffer<DeviceKeyE
     
 
         /**
+         * The poe-testnet-1 attestation root's public key (public by
+         * design; copied verbatim from crates/poe-node/testnet-1.spec).
+         */ fun `testnetRootPublicKey`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_func_testnet_root_public_key(
+        _status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify a certificate from its evidence alone, against a
+         * pinned attestation root key and the state root of the last
+         * certificate accepted. On success returns the summary; the
+         * caller chains the next certificate to `summary.state_root`.
+         */
+    @Throws(LightCoreException::class) fun `verifyCertificateBytes`(`bytes`: kotlin.ByteArray, `rootPublicKey`: kotlin.ByteArray, `expectedPrevRoot`: kotlin.ByteArray): CertSummary {
+            return FfiConverterTypeCertSummary.lift(
+    uniffiRustCallWithError(LightCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_func_verify_certificate_bytes(
+        FfiConverterByteArray.lower(`bytes`),FfiConverterByteArray.lower(`rootPublicKey`),FfiConverterByteArray.lower(`expectedPrevRoot`),_status)
+}
+    )
+    }
+    
+
+        /**
          * Verify a device signature against a public key — the check every
          * other participant runs on this device's signed acts.
          */ fun `verifySignature`(`publicKey`: kotlin.ByteArray, `message`: kotlin.ByteArray, `signature`: kotlin.ByteArray): kotlin.Boolean {
@@ -1590,6 +2398,19 @@ public object FfiConverterTypeDeviceKeyError : FfiConverterRustBuffer<DeviceKeyE
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_poe_mobile_fn_func_verify_signature(
         FfiConverterByteArray.lower(`publicKey`),FfiConverterByteArray.lower(`message`),FfiConverterByteArray.lower(`signature`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify a certificate against the pinned testnet root.
+         */
+    @Throws(LightCoreException::class) fun `verifyTestnetCertificate`(`bytes`: kotlin.ByteArray, `expectedPrevRoot`: kotlin.ByteArray): CertSummary {
+            return FfiConverterTypeCertSummary.lift(
+    uniffiRustCallWithError(LightCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_func_verify_testnet_certificate(
+        FfiConverterByteArray.lower(`bytes`),FfiConverterByteArray.lower(`expectedPrevRoot`),_status)
 }
     )
     }
