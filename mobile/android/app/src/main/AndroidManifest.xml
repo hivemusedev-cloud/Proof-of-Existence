@@ -8,6 +8,8 @@
 
     <application
         android:label="PoE Suite"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:extractNativeLibs="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity

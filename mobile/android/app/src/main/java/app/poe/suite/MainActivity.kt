@@ -1,10 +1,17 @@
 package app.poe.suite
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
+import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -23,53 +30,56 @@ import uniffi.poe_mobile.verifyTestnetCertificate
 /**
  * PoE Suite — Android light-duty app (Phase 2).
  *
- * 0.3.0 adds the light core (the design note's §11 build
- * order, item 4) on top of the 0.2.0 identity + Keystore
- * custody foundation:
+ * 0.5.0 is a UI/UX pass only (owner instruction, 2026-11-18):
+ * the face is rebuilt to a professional, plain-words
+ * standard — a home screen that says what this device can
+ * do (hold, show, verify, detect) with the main actions
+ * obvious, and every technical string (machine id, custody
+ * internals, raw roots and counts) moved behind a
+ * Details & advanced view, still fully visible there.
+ * Branding per the owners' locked rules: the name NEBIS
+ * appears only in the wordmark at the top of the home
+ * screen, the ring is the icon, navy + teal throughout.
  *
- * - Wallet containers: the app imports a coin's 1 KiB
- *   Existence Container (the .poec form the node's control
- *   surface exports), holds it wrapped under the same
- *   Keystore custody as the identity, and shows the coin
- *   offline at a terminal's challenge. Every show is
- *   recorded in the container's own log by the Rust core —
- *   a repeat challenge is refused — and the updated
- *   container is re-wrapped and stored after each show.
- * - Finality certificates: the app imports an epoch's
- *   certificate (public evidence, stored plainly) and
- *   verifies it from its evidence alone through the Rust
- *   core, against the pinned testnet root. Verified
- *   certificates chain: the next one must name the last
- *   verified state root as its predecessor. For the FIRST
- *   certificate there is no chain yet, so its predecessor
- *   is taken from the certificate itself — the bootstrap
- *   the design note's §3 describes (a light client anchors
- *   its first root from its sync source); the UI says so
- *   rather than glossing it.
+ * NO protocol or security behaviour changes in 0.5.0.
+ * Every behaviour below is the 0.4.0 behaviour verbatim:
+ * Keystore custody (wrapped identity, locked-state
+ * honesty, no silent replacement), container import
+ * refusing a held coin, a show recorded in the container's
+ * log and persisted before it is reported (a repeat
+ * challenge is refused), certificate verification against
+ * the pinned testnet root with chain enforcement (the
+ * first certificate bootstraps from itself, stated in
+ * plain words on the main screen), and the detection
+ * book's counters advancing on a match so a settled tag
+ * never matches again. Storage names and formats are
+ * unchanged, so 0.5.0 installs over 0.4.0 and every
+ * existing on-device check still applies.
  *
- * 0.4.0 adds detection (design note §5, §11 item 3): the
- * app holds a detection book — per-contact pairwise
- * secrets and next counters, wrapped under the same
- * Keystore custody — and scans a relayed tag stream for
- * its arrivals. A matched tag advances the contact's
- * counter, so a settled tag never matches again. In this
+ * The light core this UI drives (0.3.0/0.4.0): wallet
+ * containers held wrapped under Keystore custody and shown
+ * offline at a terminal's challenge; finality certificates
+ * imported as files and verified from their evidence
+ * alone; a detection book of per-contact pairwise secrets
+ * that scans a relayed tag stream for arrivals. In this
  * test build contacts are added by pasting the secret as
  * hex (testnet tooling); the product flow establishes the
- * secret at first contact, inside the app.
- *
- * Honest limits, as before: custody is at-rest (key and
- * container material are in process memory while the app
- * runs); if the Keystore wrapping key is invalidated the
- * wrapped identity AND containers are unrecoverable by
- * design, and the app says so instead of silently
- * replacing anything. The terminal prover's NFC/BLE
- * transport is not in this build. Testnet experiments
- * only.
+ * secret at first contact, inside the app. Honest limits
+ * unchanged: custody is at-rest; if the Keystore wrapping
+ * key is invalidated the wrapped identity AND containers
+ * are unrecoverable by design, and the app says so instead
+ * of silently replacing anything. The terminal prover's
+ * NFC/BLE transport is not in this build. Testnet
+ * experiments only.
  */
 class MainActivity : Activity() {
 
     private var key: DeviceKey? = null
-    private lateinit var status: TextView
+    private var custodyLevel: KeystoreCustody.Level? = null
+    private var lastCert: CertSummary? = null
+
+    private lateinit var scroll: ScrollView
+    private lateinit var selfTestStatus: TextView
     private lateinit var containerList: LinearLayout
     private lateinit var containerStatus: TextView
     private lateinit var challengeInput: EditText
@@ -80,16 +90,18 @@ class MainActivity : Activity() {
     private lateinit var contactSecretInput: EditText
     private lateinit var epochFromInput: EditText
     private lateinit var epochToInput: EditText
+    private var coinsSection: View? = null
+    private var verifySection: View? = null
+    private var detectSection: View? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         when (val outcome = KeystoreCustody.loadIdentity(filesDir)) {
             is KeystoreCustody.LoadOutcome.Loaded -> {
                 key = DeviceKey.fromBytes(outcome.pk, outcome.sk)
-                showIdentity(
-                    key!!,
-                    outcome.level,
-                    if (outcome.migrated) "Migrated from the v1 plaintext store." else null,
+                custodyLevel = outcome.level
+                showHome(
+                    if (outcome.migrated) "Your saved identity was moved into secure storage." else null,
                 )
             }
             KeystoreCustody.LoadOutcome.Absent -> {
@@ -100,163 +112,390 @@ class MainActivity : Activity() {
                     fresh.secretKey(),
                 )
                 key = fresh
-                showIdentity(fresh, level, null)
+                custodyLevel = level
+                showHome(null)
             }
             is KeystoreCustody.LoadOutcome.Locked -> showLocked(outcome.reason)
         }
     }
 
-    private fun centered(text: String, size: Float? = null) = TextView(this).apply {
-        this.text = text
-        gravity = Gravity.CENTER
-        setPadding(32, 16, 32, 8)
-        if (size != null) textSize = size
+    // ---- Styling helpers (navy + teal) ----
+
+    private fun roundedBg(fill: Int, stroke: Int, radiusDp: Float) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = radiusDp * resources.displayMetrics.density
+        setColor(fill)
+        if (stroke != Color.TRANSPARENT) setStroke(2, stroke)
     }
 
-    private fun showIdentity(key: DeviceKey, level: KeystoreCustody.Level, note: String?) {
+    private fun text(
+        s: String,
+        size: Float,
+        color: Int,
+        bold: Boolean = false,
+        alignCenter: Boolean = false,
+    ) = TextView(this).apply {
+        text = s
+        textSize = size
+        setTextColor(color)
+        if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+        if (alignCenter) gravity = Gravity.CENTER
+        setPadding(0, dp(2), 0, dp(2))
+    }
+
+    private fun title(s: String) = text(s, 20f, NAVY, bold = true)
+    private fun body(s: String) = text(s, 15f, INK)
+    private fun muted(s: String) = text(s, 13.5f, MUTED)
+
+    private fun card(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = roundedBg(Color.WHITE, BORDER, 14f)
+        setPadding(dp(16), dp(14), dp(16), dp(14))
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { setMargins(dp(16), dp(6), dp(16), dp(6)) }
+    }
+
+    private fun primaryButton(label: String, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        setTextColor(Color.WHITE)
+        background = roundedBg(TEAL, Color.TRANSPARENT, 10f)
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { setMargins(0, dp(6), 0, dp(2)) }
+    }
+
+    private fun quietButton(label: String, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        setTextColor(NAVY)
+        background = roundedBg(Color.WHITE, BORDER, 10f)
+        setOnClickListener { onClick() }
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { setMargins(0, dp(6), 0, dp(2)) }
+    }
+
+    private fun input(hintText: String, numeric: Boolean = false) = EditText(this).apply {
+        hint = hintText
+        if (numeric) inputType = InputType.TYPE_CLASS_NUMBER
+        setTextColor(INK)
+        setHintTextColor(MUTED)
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { setMargins(0, dp(4), 0, dp(4)) }
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun scrollToSection(section: View?) {
+        val s = section ?: return
+        scroll.post { scroll.smoothScrollTo(0, s.top) }
+    }
+
+    // ---- Home screen ----
+
+    private fun showHome(note: String?) {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
+            setBackgroundColor(BG)
         }
-        root.addView(centered("Machine\n${key.machineId()}", 20f))
-        root.addView(
-            centered(
-                "Light-duty wallet (testnet).\n" +
-                    "This device verifies; it does not register.",
+
+        // Header: ring icon + the wordmark (the only place
+        // the name appears, per the locked branding rules).
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(20), dp(20), dp(6))
+            addView(
+                RingView(this@MainActivity).apply {
+                    background = roundedBg(NAVY, Color.TRANSPARENT, 14f)
+                    layoutParams = LinearLayout.LayoutParams(dp(54), dp(54))
+                },
+            )
+            val words = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), 0, 0, 0)
+                addView(
+                    TextView(this@MainActivity).apply {
+                        text = "NEBIS"
+                        textSize = 27f
+                        setTextColor(NAVY)
+                        setTypeface(typeface, android.graphics.Typeface.BOLD)
+                        letterSpacing = 0.32f
+                    },
+                )
+                addView(muted("Your light wallet · test network"))
+            }
+            addView(words)
+        }
+        root.addView(header)
+        if (note != null) {
+            root.addView(
+                LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(20), dp(2), dp(20), 0)
+                    addView(muted(note))
+                },
+            )
+        }
+
+        // What this device can do — the four main actions.
+        val actions = card()
+        actions.addView(title("What this device can do"))
+        actions.addView(actionRow("Hold", "Keep coins safe on this device.") { scrollToSection(coinsSection) })
+        actions.addView(actionRow("Show", "Prove a coin at a terminal, offline.") { scrollToSection(coinsSection) })
+        actions.addView(actionRow("Verify", "Check the network's signed records yourself.") { scrollToSection(verifySection) })
+        actions.addView(actionRow("Detect", "Find what has arrived for you.") { scrollToSection(detectSection) })
+        root.addView(actions)
+
+        // This device, in plain words.
+        val device = card()
+        device.addView(title("This device"))
+        device.addView(
+            body(
+                "This device has its own identity, created here and never " +
+                    "sent anywhere. Its secret is locked in this phone's " +
+                    "secure storage and never leaves the device.",
             ),
         )
+        device.addView(muted("Protected by ${custodyLevel?.label ?: "the Android Keystore"}. Technical details are under Details & advanced, below."))
+        root.addView(device)
+
+        // ---- Your coins (hold + show) ----
+        val coins = card()
+        coinsSection = coins
+        coins.addView(title("Your coins"))
+        coins.addView(
+            body(
+                "Coins you hold live here, locked the same way as your " +
+                    "identity. To show a coin at a terminal, type the " +
+                    "number the terminal gives you, then tap Show on the " +
+                    "coin. Every show is written into the coin's own " +
+                    "record, and the same challenge can never be answered " +
+                    "twice.",
+            ),
+        )
+        challengeInput = input("Number shown by the terminal", numeric = true)
+        coins.addView(challengeInput)
+        containerList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        coins.addView(containerList)
+        coins.addView(primaryButton("Add a coin from a file") { pickFile(REQ_CONTAINER) })
+        containerStatus = muted("")
+        coins.addView(containerStatus)
+        root.addView(coins)
+
+        // ---- Verify (finality certificates) ----
+        val verify = card()
+        verifySection = verify
+        verify.addView(title("Check the network"))
+        verify.addView(
+            body(
+                "For each epoch, the network publishes a signed record " +
+                    "of what happened. This device checks the signature " +
+                    "itself — it trusts no server. The first record you " +
+                    "check is your starting point: its starting link is " +
+                    "taken from the record itself. After that, every " +
+                    "record must link to the last one you checked, or it " +
+                    "is refused.",
+            ),
+        )
+        certStatus = body(chainStatusText())
+        verify.addView(certStatus)
+        verify.addView(primaryButton("Check a record file") { pickFile(REQ_CERT) })
+        root.addView(verify)
+
+        // ---- Detect (detection tags) ----
+        val detect = card()
+        detectSection = detect
+        detect.addView(title("Find arrivals"))
+        detect.addView(
+            body(
+                "When something is sent to you, it carries a tag that " +
+                    "only your device can recognize. Add a contact's " +
+                    "shared secret, then scan a tag file to find what " +
+                    "has arrived. Once an arrival is found it is marked " +
+                    "as settled, so it never shows up twice.",
+            ),
+        )
+        detectionStatus = body("")
+        detect.addView(detectionStatus)
+        contactNameInput = input("Contact name")
+        detect.addView(contactNameInput)
+        contactSecretInput = input("Shared secret (64 hex characters — test tooling)")
+        detect.addView(contactSecretInput)
+        detect.addView(primaryButton("Add contact") { addContact() })
+        epochFromInput = input("From epoch", numeric = true).apply { setText("0") }
+        detect.addView(epochFromInput)
+        epochToInput = input("To epoch", numeric = true).apply { setText("999") }
+        detect.addView(epochToInput)
+        detect.addView(primaryButton("Look for arrivals in a file") { pickFile(REQ_TAGS) })
+        root.addView(detect)
+
+        // Details & advanced.
+        val details = card()
+        details.addView(quietButton("Details & advanced") { showDetails() })
+        root.addView(details)
         root.addView(
-            centered(
-                buildString {
-                    append("Key custody: ${level.label} — the secret key is\n")
-                    append("stored encrypted; its unlock key never leaves\n")
-                    append("the Android Keystore.")
-                    if (note != null) append("\n").append(note)
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), dp(4), dp(20), dp(20))
+                addView(muted("Test build — testnet experiments only."))
+            },
+        )
+
+        scroll = ScrollView(this).apply {
+            setBackgroundColor(BG)
+            addView(root)
+        }
+        setContentView(scroll)
+        refreshContainers()
+        loadBook()
+    }
+
+    private fun actionRow(label: String, line: String, onClick: () -> Unit): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(7), 0, dp(7))
+            isClickable = true
+            setOnClickListener { onClick() }
+            addView(
+                TextView(this@MainActivity).apply {
+                    text = label
+                    textSize = 16.5f
+                    setTextColor(TEAL)
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(dp(74), LinearLayout.LayoutParams.WRAP_CONTENT)
+                },
+            )
+            addView(
+                TextView(this@MainActivity).apply {
+                    text = line
+                    textSize = 14.5f
+                    setTextColor(INK)
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                },
+            )
+            addView(
+                TextView(this@MainActivity).apply {
+                    text = "›"
+                    textSize = 20f
+                    setTextColor(MUTED)
+                },
+            )
+        }
+        return row
+    }
+
+    // ---- Details & advanced ----
+
+    private fun showDetails() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(BG)
+            setPadding(0, dp(8), 0, dp(16))
+        }
+        val head = card()
+        head.addView(title("Details & advanced"))
+        head.addView(muted("Everything technical, in one place. Nothing here is hidden — it is simply kept off the main screens."))
+        head.addView(quietButton("Back") { showHome(null) })
+        root.addView(head)
+
+        val identity = card()
+        identity.addView(title("Device identity"))
+        identity.addView(body("Machine ${key?.machineId()}"))
+        identity.addView(body("Key custody: ${custodyLevel?.label}"))
+        identity.addView(
+            muted(
+                "The secret key is stored encrypted (wrapped blob, " +
+                    "AES-GCM); its unlock key never leaves the Android " +
+                    "Keystore. Custody is at-rest: while the app runs, " +
+                    "the unwrapped key exists in process memory.",
+            ),
+        )
+        selfTestStatus = body("")
+        identity.addView(primaryButton("Run sign / verify self-test") { runSelfTest() })
+        identity.addView(selfTestStatus)
+        root.addView(identity)
+
+        val chain = card()
+        chain.addView(title("Certificate chain"))
+        val tip = chainTip()
+        chain.addView(
+            body(
+                if (tip == null) "No certificate verified yet."
+                else "Verified through epoch ${tip.first}.\nState root ${tip.second}",
+            ),
+        )
+        val lc = lastCert
+        if (lc != null) {
+            chain.addView(
+                muted(
+                    "Last verified this session — epoch ${lc.epoch}, close round " +
+                        "${lc.closeRound}, minted ${lc.minted}; ${lc.votes} votes over " +
+                        "${lc.reveals} reveals, ${lc.announcements} announcements.\n" +
+                        "Companion root ${lc.companionRoot}",
+                ),
+            )
+        }
+        root.addView(chain)
+
+        val det = card()
+        det.addView(title("Detection book"))
+        val b = book
+        det.addView(
+            body(
+                if (b == null || b.contacts().isEmpty()) {
+                    "No contacts."
+                } else {
+                    b.contacts().joinToString("\n") { name -> "$name — next counter ${b.nextCounter(name)}" }
                 },
             ),
         )
-        val testButton = Button(this).apply {
-            text = "Run sign / verify self-test"
-            setOnClickListener { runSelfTest() }
-        }
-        root.addView(testButton)
-        status = centered("")
-        root.addView(status)
-
-        // ---- Wallet containers ----
-        root.addView(centered("Wallet containers", 18f))
-        root.addView(
-            centered(
-                "Held coins, wrapped under the same Keystore\n" +
-                    "custody. A show is recorded in the container's\n" +
-                    "log; a repeat challenge is refused.",
-            ),
-        )
-        challengeInput = EditText(this).apply {
-            hint = "Terminal challenge (number)"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            gravity = Gravity.CENTER
-        }
-        root.addView(challengeInput)
-        containerList = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
-        root.addView(containerList)
-        val importButton = Button(this).apply {
-            text = "Import container (.poec)"
-            setOnClickListener { pickFile(REQ_CONTAINER) }
-        }
-        root.addView(importButton)
-        containerStatus = centered("")
-        root.addView(containerStatus)
-
-        // ---- Finality certificates ----
-        root.addView(centered("Finality certificates", 18f))
-        certStatus = centered(chainStatusText())
-        root.addView(certStatus)
-        val certButton = Button(this).apply {
-            text = "Import & verify certificate"
-            setOnClickListener { pickFile(REQ_CERT) }
-        }
-        root.addView(certButton)
-
-        // ---- Detection ----
-        root.addView(centered("Detection", 18f))
-        root.addView(
-            centered(
-                "Incoming notes and messages are found by their\n" +
-                    "detection tags. Add a contact's pairwise secret\n" +
-                    "(testnet tooling: pasted as 64 hex characters),\n" +
-                    "then scan a relayed tag stream. The book is held\n" +
-                    "wrapped under the same Keystore custody.",
-            ),
-        )
-        detectionStatus = centered("")
-        root.addView(detectionStatus)
-        contactNameInput = EditText(this).apply {
-            hint = "Contact name"
-            gravity = Gravity.CENTER
-        }
-        root.addView(contactNameInput)
-        contactSecretInput = EditText(this).apply {
-            hint = "Pairwise secret (64 hex characters)"
-            gravity = Gravity.CENTER
-        }
-        root.addView(contactSecretInput)
-        val addContactButton = Button(this).apply {
-            text = "Add contact"
-            setOnClickListener { addContact() }
-        }
-        root.addView(addContactButton)
-        epochFromInput = EditText(this).apply {
-            hint = "From epoch"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            gravity = Gravity.CENTER
-            setText("0")
-        }
-        root.addView(epochFromInput)
-        epochToInput = EditText(this).apply {
-            hint = "To epoch"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            gravity = Gravity.CENTER
-            setText("999")
-        }
-        root.addView(epochToInput)
-        val scanButton = Button(this).apply {
-            text = "Scan tag stream file"
-            setOnClickListener { pickFile(REQ_TAGS) }
-        }
-        root.addView(scanButton)
+        det.addView(muted("The book is held wrapped under the same Keystore custody (data item \"detection-book\"). Containers are items \"container-<coin>\"; verified certificates are stored plainly as \"cert-<epoch>.bin\" with the chain tip in \"cert-chain.txt\"."))
+        root.addView(det)
 
         setContentView(ScrollView(this).apply { addView(root) })
-        refreshContainers()
-        loadBook()
     }
 
     private fun showLocked(reason: String) {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            addView(centered("Stored identity cannot be unlocked", 20f))
-            addView(
-                centered(
-                    reason + "\n\nThe app will not replace it silently. " +
-                        "Erasing removes the wrapped identity, its containers, " +
-                        "and its unlock key; a new identity is then created.",
-                ),
-            )
-            addView(
-                Button(this@MainActivity).apply {
-                    text = "Erase and create a new identity"
-                    setOnClickListener {
+            setBackgroundColor(BG)
+            setPadding(0, dp(8), 0, dp(16))
+        }
+        val card = card()
+        card.addView(title("Your saved identity can't be opened"))
+        card.addView(
+            body(
+                "The identity stored on this device is locked and cannot " +
+                    "be unlocked — this can happen if the phone's secure " +
+                    "storage was reset. The app will not replace it " +
+                    "silently. Erasing removes the locked identity, its " +
+                    "coins, and its unlock key; a new identity is then " +
+                    "created.",
+            ),
+        )
+        card.addView(muted("Technical reason: $reason"))
+        card.addView(
+            primaryButton("Erase and create a new identity") {
+                AlertDialog.Builder(this)
+                    .setMessage("Erase the locked identity, its coins, and its unlock key, and create a new identity?")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Erase") { _, _ ->
                         KeystoreCustody.eraseIdentity(filesDir)
                         recreate()
                     }
-                },
-            )
-        }
-        setContentView(root)
+                    .show()
+            },
+        )
+        root.addView(card)
+        setContentView(ScrollView(this).apply { addView(root) })
     }
 
     private fun runSelfTest() {
@@ -269,20 +508,20 @@ class MainActivity : Activity() {
             "tampered".toByteArray(),
             signature,
         )
-        status.text = if (ok && !tampered) {
-            "Self-test passed: signature verifies,\nand a tampered message is refused."
+        selfTestStatus.text = if (ok && !tampered) {
+            "Self-test passed: signature verifies, and a tampered message is refused."
         } else {
             "Self-test FAILED (verify=$ok, tampered=$tampered)."
         }
     }
 
-    // ---- Containers ----
+    // ---- Containers (behaviour unchanged from 0.4.0) ----
 
     private fun refreshContainers() {
         containerList.removeAllViews()
         val names = KeystoreCustody.listData(filesDir).filter { it.startsWith("container-") }
         if (names.isEmpty()) {
-            containerList.addView(centered("No containers held."))
+            containerList.addView(muted("No coins held yet."))
             return
         }
         for (name in names) {
@@ -291,39 +530,68 @@ class MainActivity : Activity() {
                     try {
                         val container = WalletContainer.fromBytes(outcome.data)
                         val info = container.info()
-                        containerList.addView(
-                            centered(
-                                "Coin ${info.coin} · value ${info.value} · " +
-                                    "born epoch ${info.born} · ${info.showsRecorded} show(s)",
-                            ),
-                        )
-                        val row = LinearLayout(this).apply {
-                            orientation = LinearLayout.HORIZONTAL
-                            gravity = Gravity.CENTER
+                        val coinCard = LinearLayout(this).apply {
+                            orientation = LinearLayout.VERTICAL
+                            background = roundedBg(BG, BORDER, 10f)
+                            setPadding(dp(12), dp(10), dp(12), dp(10))
+                            layoutParams = LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
+                            ).apply { setMargins(0, dp(4), 0, dp(4)) }
                             addView(
-                                Button(this@MainActivity).apply {
-                                    text = "Show coin ${info.coin}"
-                                    setOnClickListener { showContainer(name, container) }
-                                },
+                                body(
+                                    "Coin ${info.coin} · value ${info.value}\n" +
+                                        "Arrived in epoch ${info.born} · shown ${info.showsRecorded} time(s)",
+                                ),
                             )
-                            addView(
-                                Button(this@MainActivity).apply {
-                                    text = "Remove"
-                                    setOnClickListener {
-                                        KeystoreCustody.deleteData(filesDir, name)
-                                        containerStatus.text = "Container for coin ${info.coin} removed."
-                                        refreshContainers()
-                                    }
-                                },
-                            )
+                            val row = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL
+                                addView(
+                                    Button(this@MainActivity).apply {
+                                        text = "Show this coin"
+                                        setTextColor(Color.WHITE)
+                                        background = roundedBg(TEAL, Color.TRANSPARENT, 10f)
+                                        setOnClickListener { showContainer(name, container) }
+                                        layoutParams = LinearLayout.LayoutParams(
+                                            0,
+                                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                                            1f,
+                                        ).apply { setMargins(0, dp(6), dp(4), 0) }
+                                    },
+                                )
+                                addView(
+                                    Button(this@MainActivity).apply {
+                                        text = "Remove"
+                                        setTextColor(NAVY)
+                                        background = roundedBg(Color.WHITE, BORDER, 10f)
+                                        setOnClickListener {
+                                            AlertDialog.Builder(this@MainActivity)
+                                                .setMessage("Remove coin ${info.coin} from this device?")
+                                                .setNegativeButton("Cancel", null)
+                                                .setPositiveButton("Remove") { _, _ ->
+                                                    KeystoreCustody.deleteData(filesDir, name)
+                                                    containerStatus.text = "Coin ${info.coin} removed."
+                                                    refreshContainers()
+                                                }
+                                                .show()
+                                        }
+                                        layoutParams = LinearLayout.LayoutParams(
+                                            0,
+                                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                                            1f,
+                                        ).apply { setMargins(dp(4), dp(6), 0, 0) }
+                                    },
+                                )
+                            }
+                            addView(row)
                         }
-                        containerList.addView(row)
+                        containerList.addView(coinCard)
                     } catch (e: LightCoreException) {
-                        containerList.addView(centered("Stored container is unreadable: ${e.message}"))
+                        containerList.addView(muted("A stored coin is unreadable: ${e.message}"))
                     }
                 }
                 is KeystoreCustody.DataOutcome.Locked ->
-                    containerList.addView(centered("Container locked: ${outcome.reason}"))
+                    containerList.addView(muted("A stored coin is locked: ${outcome.reason}"))
                 KeystoreCustody.DataOutcome.Absent -> Unit
             }
         }
@@ -332,7 +600,7 @@ class MainActivity : Activity() {
     private fun showContainer(name: String, container: WalletContainer) {
         val challenge = challengeInput.text.toString().toULongOrNull()
         if (challenge == null) {
-            containerStatus.text = "Enter the terminal's challenge number first."
+            containerStatus.text = "Type the number the terminal shows you, above, first."
             return
         }
         try {
@@ -341,16 +609,15 @@ class MainActivity : Activity() {
             // log now) under the same custody before reporting.
             KeystoreCustody.storeData(filesDir, name, container.toBytes())
             containerStatus.text =
-                "Show for coin ${show.coin}: challenge ${show.challenge},\n" +
-                    "response ${show.response}. Give the terminal these\n" +
-                    "three numbers (coin, challenge, response)."
+                "Shown. Tell the terminal: coin ${show.coin}, " +
+                    "challenge ${show.challenge}, answer ${show.response}."
             refreshContainers()
         } catch (e: LightCoreException) {
             containerStatus.text = "Show refused: ${e.message}"
         }
     }
 
-    // ---- Certificates ----
+    // ---- Certificates (behaviour unchanged from 0.4.0) ----
 
     private val chainFile get() = File(filesDir, CHAIN_FILE)
 
@@ -365,12 +632,9 @@ class MainActivity : Activity() {
     private fun chainStatusText(): String {
         val tip = chainTip()
         return if (tip == null) {
-            "No certificate verified yet. The first certificate's\n" +
-                "predecessor is taken from the certificate itself\n" +
-                "(bootstrap); later ones must chain to it."
+            "No record checked yet."
         } else {
-            "Verified through epoch ${tip.first}.\n" +
-                "Next certificate must chain to root ${tip.second.take(16)}…"
+            "Checked up to epoch ${tip.first}. The next record must link to this one."
         }
     }
 
@@ -378,34 +642,37 @@ class MainActivity : Activity() {
         val summary = try {
             certificateSummary(bytes)
         } catch (e: LightCoreException) {
-            certStatus.text = "Not a certificate: ${e.message}"
+            certStatus.text = "That file is not a network record: ${e.message}"
             return
         }
         val tip = chainTip()
         val expectedPrevHex = tip?.second ?: summary.prevStateRoot
         val expectedPrev = hexToBytes(expectedPrevHex)
         if (expectedPrev == null) {
-            certStatus.text = "Stored chain root is not valid hex; cannot verify."
+            certStatus.text = "The stored chain link is not valid hex; cannot verify."
             return
         }
         try {
             val verified = verifyTestnetCertificate(bytes, expectedPrev)
             File(filesDir, "cert-${verified.epoch}.bin").writeBytes(bytes)
             chainFile.writeText("${verified.epoch} ${verified.stateRoot}")
+            lastCert = verified
             certStatus.text = verifiedText(verified, bootstrapped = tip == null)
         } catch (e: LightCoreException) {
-            certStatus.text = "Certificate REFUSED: ${e.message}"
+            certStatus.text = "Record REFUSED: ${e.message}"
         }
     }
 
     private fun verifiedText(s: CertSummary, bootstrapped: Boolean): String =
-        "VERIFIED — epoch ${s.epoch}, close round ${s.closeRound},\n" +
-            "minted ${s.minted}; ${s.votes} votes over ${s.reveals} reveals,\n" +
-            "${s.announcements} announcements. Companion root\n" +
-            "${s.companionRoot.take(32)}…" +
-            if (bootstrapped) "\n(First certificate: predecessor taken from the\ncertificate itself — bootstrap.)" else ""
+        "Record accepted — epoch ${s.epoch} is checked and chained." +
+            if (bootstrapped) {
+                "\n(This was your first record: its starting link came " +
+                    "from the record itself.)"
+            } else {
+                ""
+            }
 
-    // ---- Detection ----
+    // ---- Detection (behaviour unchanged from 0.4.0) ----
 
     private fun loadBook() {
         book = when (val outcome = KeystoreCustody.loadData(filesDir, BOOK_NAME)) {
@@ -417,7 +684,7 @@ class MainActivity : Activity() {
                 }
             else -> DetectionBook()
         }
-        refreshDetectionStatus("Detection book ready.")
+        refreshDetectionStatus("Your address book for arrivals is ready.")
     }
 
     private fun persistBook() {
@@ -425,7 +692,7 @@ class MainActivity : Activity() {
         try {
             KeystoreCustody.storeData(filesDir, BOOK_NAME, b.exportState())
         } catch (e: Exception) {
-            detectionStatus.text = "Could not store the detection book: ${e.message}"
+            detectionStatus.text = "Could not store the address book: ${e.message}"
         }
     }
 
@@ -436,7 +703,7 @@ class MainActivity : Activity() {
             lines.append("\nNo contacts yet.")
         } else {
             for (name in b.contacts()) {
-                lines.append("\n$name — next counter ${b.nextCounter(name)}")
+                lines.append("\n$name — watching for arrivals")
             }
         }
         detectionStatus.text = lines.toString()
@@ -448,7 +715,7 @@ class MainActivity : Activity() {
         val secret = hexToBytes(contactSecretInput.text.toString().trim())
         if (name.isEmpty() || secret == null || secret.size != 32) {
             detectionStatus.text =
-                "A contact needs a name and a 32-byte secret (64 hex characters)."
+                "A contact needs a name and a shared secret (64 hex characters)."
             return
         }
         try {
@@ -473,9 +740,9 @@ class MainActivity : Activity() {
             val hits = b.scan(bytes, from, to, 64uL)
             persistBook()
             val summary = if (hits.isEmpty()) {
-                "No arrivals found in this stream."
+                "No arrivals found in this file."
             } else {
-                hits.joinToString("\n") { "Found: ${it.contact} #${it.counter} @ epoch ${it.epoch}" }
+                hits.joinToString("\n") { "Arrived for ${it.contact}: #${it.counter} in epoch ${it.epoch}" }
             }
             refreshDetectionStatus(summary)
         } catch (e: LightCoreException) {
@@ -483,7 +750,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // ---- File picking ----
+    // ---- File picking (unchanged) ----
 
     private fun pickFile(request: Int) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -513,13 +780,13 @@ class MainActivity : Activity() {
             val info = container.info()
             val name = "container-${info.coin}"
             if (KeystoreCustody.loadData(filesDir, name) !is KeystoreCustody.DataOutcome.Absent) {
-                containerStatus.text = "A container for coin ${info.coin} is already held."
+                containerStatus.text = "Coin ${info.coin} is already held."
                 return
             }
             KeystoreCustody.storeData(filesDir, name, container.toBytes())
             containerStatus.text =
-                "Container imported: coin ${info.coin}, value ${info.value}, " +
-                    "born epoch ${info.born}."
+                "Coin added: coin ${info.coin}, value ${info.value}, " +
+                    "arrived in epoch ${info.born}."
             refreshContainers()
         } catch (e: LightCoreException) {
             containerStatus.text = "Import refused: ${e.message}"
@@ -543,5 +810,40 @@ class MainActivity : Activity() {
         private const val REQ_TAGS = 43
         private const val BOOK_NAME = "detection-book"
         private const val CHAIN_FILE = "cert-chain.txt"
+
+        // Locked palette: navy + teal.
+        private val NAVY = Color.rgb(10, 37, 64)
+        private val TEAL = Color.rgb(13, 148, 136)
+        private val INK = Color.rgb(38, 54, 72)
+        private val MUTED = Color.rgb(107, 124, 147)
+        private val BORDER = Color.rgb(216, 227, 240)
+        private val BG = Color.rgb(244, 247, 251)
+    }
+}
+
+/**
+ * The ring mark, drawn: a teal ring with a centre dot, on
+ * whatever background the caller gives it (navy in the
+ * header; the launcher's adaptive icon carries the same
+ * drawing as a vector resource).
+ */
+private class RingView(context: Context) : View(context) {
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.rgb(20, 184, 166)
+    }
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.rgb(20, 184, 166)
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val size = minOf(width, height).toFloat()
+        val cx = width / 2f
+        val cy = height / 2f
+        ringPaint.strokeWidth = size * 0.115f
+        canvas.drawCircle(cx, cy, size * 0.295f, ringPaint)
+        canvas.drawCircle(cx, cy, size * 0.075f, dotPaint)
     }
 }

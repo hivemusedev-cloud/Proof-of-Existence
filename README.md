@@ -859,3 +859,34 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     6/6 calls failed `read EPIPE` before; 8/8 succeed
     after, including three concurrent calls (status, quote,
     notes) of the kind that collided in the field.
+31. **Android UI/UX pass — app 0.5.0** (2026-11-18, owner
+    instruction; UI only). The Android app's face was a
+    developer's face: one scrolling column of technical
+    text. 0.5.0 rebuilds it to a plain-words standard: a
+    home screen whose first card says what the device can
+    do — hold, show, verify, detect — with the main actions
+    as tappable rows; sections in plain words (Your coins,
+    Check the network, Find arrivals); and every technical
+    string (machine id, custody level internals, chain
+    roots, raw counts, storage item names) moved behind a
+    Details & advanced view, fully visible there. The
+    certificate bootstrap honesty is kept in plain words on
+    the main screen, not dropped. Branding per the owners'
+    locked rules: the name NEBIS appears only in the
+    wordmark at the top of the home screen, the ring is the
+    icon (adaptive icon: navy background, teal ring), navy
+    + teal throughout. No protocol or security behaviour
+    changed: every custody, show, verification and
+    detection code path is the 0.4.0 code verbatim, storage
+    names and formats are untouched, and the APK is signed
+    with the same certificate as 0.1.0–0.4.0 (versionCode
+    5), so it installs over 0.4.0 and all existing
+    on-device checks still apply. Two precise notes: the
+    owners' locked Concept 2/Concept 3 artwork files are
+    not in this workspace, so the ring and wordmark are
+    rendered from the written description (vector + drawn
+    ring, typeset wordmark) — the artwork is a drop-in
+    asset swap when the files arrive; and no emulator is
+    available on the build host, so the layout is verified
+    by compilation and packaging, with the visual check
+    the owner's on device.

@@ -12,9 +12,18 @@ poe-wallet and poe-finality.
 
 ## Android — built here
 
-`android/poe-suite-android-0.4.0.apk` (arm64, minSdk 28)
+`android/poe-suite-android-0.5.0.apk` (arm64, minSdk 28)
 is built and signature-verified (same debug certificate as
-0.1.0–0.3.0, so it installs as an upgrade). The 0.2.0 build
+0.1.0–0.4.0, so it installs as an upgrade). **0.5.0 is a
+UI/UX pass only** (2026-11-18): plain-words home screen
+(hold / show / verify / detect), technical strings behind
+a Details & advanced view, ring launcher icon and the
+NEBIS wordmark per the owners' locked branding rules,
+navy + teal. No security or protocol behaviour changed —
+every custody, show, verification and detection path is
+the 0.4.0 code, and storage names/formats are untouched,
+so the 0.3.0/0.4.0 on-device checks carry over. The
+0.4.0 build it succeeds added detection (below). The 0.2.0 build
 was verified on the owner's device (identity created under
 Keystore custody, self-test passed). 0.3.0 was verified on
 the owner's device on 2026-11-17: installed over 0.2.0,
