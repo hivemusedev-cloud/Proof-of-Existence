@@ -64,12 +64,14 @@ fi
 "$BT/aapt2" link -o "$BUILD/app-unsigned.apk" -I "$AJ" \
   --manifest "$APP/AndroidManifest.xml" \
   --min-sdk-version 28 --target-sdk-version 34 \
-  --version-code 5 --version-name 0.5.0 \
+  --version-code 6 --version-name 0.5.1 \
   "$BUILD/res-compiled.zip"
 cp "$BUILD/dex/classes.dex" "$BUILD/stage/"
 cp "$APP/jniLibs/arm64-v8a/libpoe_mobile.so" "$BUILD/stage/lib/arm64-v8a/"
 cp "$BUILD/jna-aar/jni/arm64-v8a/libjnidispatch.so" "$BUILD/stage/lib/arm64-v8a/"
-(cd "$BUILD/stage" && zip -q -r "$BUILD/app-unsigned.apk" classes.dex lib)
+rm -rf "$BUILD/stage/assets"
+cp -r "$APP/assets" "$BUILD/stage/"
+(cd "$BUILD/stage" && zip -q -r "$BUILD/app-unsigned.apk" classes.dex lib assets)
 "$BT/zipalign" -f -p 4 "$BUILD/app-unsigned.apk" "$BUILD/app-aligned.apk"
 [ -f "$BUILD/debug.keystore" ] || keytool -genkeypair \
   -keystore "$BUILD/debug.keystore" -storepass android -keypass android \
@@ -77,6 +79,6 @@ cp "$BUILD/jna-aar/jni/arm64-v8a/libjnidispatch.so" "$BUILD/stage/lib/arm64-v8a/
   -dname "CN=PoE Debug,O=PoE,C=BD"
 "$BT/apksigner" sign --ks "$BUILD/debug.keystore" \
   --ks-pass pass:android --key-pass pass:android \
-  --out "$ROOT/android/poe-suite-android-0.5.0.apk" "$BUILD/app-aligned.apk"
-"$BT/apksigner" verify "$ROOT/android/poe-suite-android-0.5.0.apk"
-echo "APK: $ROOT/android/poe-suite-android-0.5.0.apk"
+  --out "$ROOT/android/poe-suite-android-0.5.1.apk" "$BUILD/app-aligned.apk"
+"$BT/apksigner" verify "$ROOT/android/poe-suite-android-0.5.1.apk"
+echo "APK: $ROOT/android/poe-suite-android-0.5.1.apk"

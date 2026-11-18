@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -14,6 +15,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -211,12 +213,29 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(6))
-            addView(
+            // The owners' ring artwork (assets/ring-mark.png,
+            // generated from the Concept 2 source by
+            // tools/make_icons.py). If the asset cannot be
+            // read, the header falls back to the drawn ring.
+            val markBitmap = try {
+                assets.open("ring-mark.png").use { BitmapFactory.decodeStream(it) }
+            } catch (e: Exception) {
+                null
+            }
+            val markView: View = if (markBitmap != null) {
+                ImageView(this@MainActivity).apply {
+                    background = roundedBg(NAVY, Color.TRANSPARENT, 14f)
+                    setPadding(dp(8), dp(8), dp(8), dp(8))
+                    layoutParams = LinearLayout.LayoutParams(dp(54), dp(54))
+                    setImageBitmap(markBitmap)
+                }
+            } else {
                 RingView(this@MainActivity).apply {
                     background = roundedBg(NAVY, Color.TRANSPARENT, 14f)
                     layoutParams = LinearLayout.LayoutParams(dp(54), dp(54))
-                },
-            )
+                }
+            }
+            addView(markView)
             val words = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), 0, 0, 0)

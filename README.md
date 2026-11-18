@@ -890,3 +890,66 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     available on the build host, so the layout is verified
     by compilation and packaging, with the visual check
     the owner's on device.
+
+32. **Android artwork swap — app 0.5.1** (2026-11-18). The
+    owners' Concept 2 artwork arrived (owner upload,
+    2026-11-18), closing the gap named in correction 31:
+    the drawn ring is replaced by the real artwork. The
+    generator (`mobile/android/tools/make_icons.py`) leaves
+    the artwork's geometry untouched: its luminance becomes
+    the alpha channel, the black ground is mapped to the
+    suite navy (#0A2540), and the mark stays white exactly
+    as drawn. Outputs are the launcher icon at five
+    densities (normal and round) and a 512 px header mark
+    (`assets/ring-mark.png`) shown beside the wordmark; the
+    0.5.0 adaptive-icon XMLs and the vector ring are gone,
+    and the in-code drawn ring remains only as a fallback
+    if the asset ever fails to load. Everything else is
+    0.5.0 verbatim — same storage, same security behaviour,
+    same signing certificate (versionCode 6), so it
+    installs over 0.5.0. The APK (1,402,392 bytes) is built
+    locally and not pushed, per standing practice. One repo
+    note: the two `mipmap-anydpi-v26` XML files from 0.5.0
+    are absent from the built APK but could not be deleted
+    from the repo tree with the API helper (it has no
+    delete); they are superseded by the PNG set and a tree
+    cleanup is owed.
+
+33. **Phase 3 standalone image — built; boots; two defects
+    open** (2026-11-18). The Phase 3 preparation of
+    correction-era scope work is now a built image
+    (`~/workspace/poe-standalone-build/`, report
+    BUILD_REPORT.md there): Debian bookworm amd64, GPT with
+    a systemd-boot ESP (per-slot kernels) + A/B read-only
+    rootfs slots + a /data partition; the skeleton's
+    poe-node.service baked verbatim; epoch-209 bundle baked
+    for first-boot sync; first boot is the identity
+    ceremony, no identity baked in. The poe-update agent
+    implements the poe-update-1 rules in order (≥2-of-3
+    owner ML-DSA signatures over the canonical manifest,
+    /data anti-rollback counter, image hash, inactive-slot
+    write, trial boot, control-socket health check → bless
+    or rollback + quarantine); battery 11/11; it cannot
+    sign, and the image's trust store ships EMPTY — the
+    agent verifiably refuses the shipped unsigned manifest
+    against it. The QEMU boot tests caught three defects,
+    all fixed in the build script: D1 missing systemd-sysv
+    (no /sbin/init), D2 the systemd-boot default entry
+    needs the `.conf` suffix, D3 the read-only rootfs
+    shipped without /data and /boot/efi mount points (both
+    fstab mounts failed → emergency mode), with dosfstools
+    added for the ESP's fsck pass. The D3-fixed image
+    (sha256 b3b34e5b…) **boots clean to a login prompt and
+    performs its first-boot ceremony** (firstboot marker,
+    /data/poe-node created, bundle staged), and the health
+    check correctly detected and logged the one remaining
+    failure: **D4 — the node service starts but never
+    reaches readiness in the guest** (no identity files, no
+    control socket within the 600 s health deadline;
+    mechanism undiagnosed — the guest journal is volatile
+    and did not survive the test), and **D5 —
+    systemd-networkd/resolved fail repeatedly** in the
+    guest (journal needed; may or may not be D4's cause).
+    The image is DEV/TESTNET ONLY (file-stub vault, empty
+    trust, unsigned manifest). standalone/README.md now
+    records this status.
