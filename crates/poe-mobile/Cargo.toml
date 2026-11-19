@@ -13,6 +13,8 @@ poe-crypto = { path = "../poe-crypto" }
 poe-identity = { path = "../poe-identity" }
 poe-wallet = { path = "../poe-wallet" }
 poe-finality = { path = "../poe-finality" }
+poe-store = { path = "../poe-store" }
+poe-kernel = { path = "../poe-kernel" }
 rand = "0.8"
 
 [dev-dependencies]

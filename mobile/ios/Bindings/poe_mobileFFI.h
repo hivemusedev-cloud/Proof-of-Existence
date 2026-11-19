@@ -388,6 +388,11 @@ RustBuffer uniffi_poe_mobile_fn_func_certificate_summary(RustBuffer bytes, RustC
 uint64_t uniffi_poe_mobile_fn_func_machine_id_for_public_key(RustBuffer public_key, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_NOTE_PROOF_EPOCH
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_NOTE_PROOF_EPOCH
+RustBuffer uniffi_poe_mobile_fn_func_note_proof_epoch(RustBuffer proof_json, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_TESTNET_ROOT_PUBLIC_KEY
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_TESTNET_ROOT_PUBLIC_KEY
 RustBuffer uniffi_poe_mobile_fn_func_testnet_root_public_key(RustCallStatus *_Nonnull out_status
@@ -397,6 +402,11 @@ RustBuffer uniffi_poe_mobile_fn_func_testnet_root_public_key(RustCallStatus *_No
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_CERTIFICATE_BYTES
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_CERTIFICATE_BYTES
 RustBuffer uniffi_poe_mobile_fn_func_verify_certificate_bytes(RustBuffer bytes, RustBuffer root_public_key, RustBuffer expected_prev_root, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_NOTE_PROOF_JSON
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_NOTE_PROOF_JSON
+RustBuffer uniffi_poe_mobile_fn_func_verify_note_proof_json(RustBuffer proof_json, RustBuffer cert_bytes, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_FN_FUNC_VERIFY_SIGNATURE
@@ -701,6 +711,12 @@ uint16_t uniffi_poe_mobile_checksum_func_machine_id_for_public_key(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_NOTE_PROOF_EPOCH
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_NOTE_PROOF_EPOCH
+uint16_t uniffi_poe_mobile_checksum_func_note_proof_epoch(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_TESTNET_ROOT_PUBLIC_KEY
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_TESTNET_ROOT_PUBLIC_KEY
 uint16_t uniffi_poe_mobile_checksum_func_testnet_root_public_key(void
@@ -710,6 +726,12 @@ uint16_t uniffi_poe_mobile_checksum_func_testnet_root_public_key(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_CERTIFICATE_BYTES
 #define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_CERTIFICATE_BYTES
 uint16_t uniffi_poe_mobile_checksum_func_verify_certificate_bytes(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_NOTE_PROOF_JSON
+#define UNIFFI_FFIDEF_UNIFFI_POE_MOBILE_CHECKSUM_FUNC_VERIFY_NOTE_PROOF_JSON
+uint16_t uniffi_poe_mobile_checksum_func_verify_note_proof_json(void
     
 );
 #endif

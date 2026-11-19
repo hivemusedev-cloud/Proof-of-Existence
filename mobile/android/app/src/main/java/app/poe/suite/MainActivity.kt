@@ -26,6 +26,8 @@ import uniffi.poe_mobile.DeviceKey
 import uniffi.poe_mobile.LightCoreException
 import uniffi.poe_mobile.WalletContainer
 import uniffi.poe_mobile.certificateSummary
+import uniffi.poe_mobile.noteProofEpoch
+import uniffi.poe_mobile.verifyNoteProofJson
 import uniffi.poe_mobile.verifySignature
 import uniffi.poe_mobile.verifyTestnetCertificate
 
@@ -79,6 +81,7 @@ class MainActivity : Activity() {
     private var key: DeviceKey? = null
     private var custodyLevel: KeystoreCustody.Level? = null
     private var lastCert: CertSummary? = null
+    private var pendingProofCoin: ULong? = null
 
     private lateinit var scroll: ScrollView
     private lateinit var selfTestStatus: TextView
@@ -603,6 +606,24 @@ class MainActivity : Activity() {
                                 )
                             }
                             addView(row)
+                            addView(
+                                Button(this@MainActivity).apply {
+                                    text = "Prove it's live"
+                                    setTextColor(NAVY)
+                                    background = roundedBg(Color.WHITE, BORDER, 10f)
+                                    setOnClickListener {
+                                        pendingProofCoin = info.coin
+                                        containerStatus.text =
+                                            "Pick the proof file for coin ${info.coin} — " +
+                                                "the note.proof reply you saved from a node."
+                                        pickFile(REQ_PROOF)
+                                    }
+                                    layoutParams = LinearLayout.LayoutParams(
+                                        LinearLayout.LayoutParams.MATCH_PARENT,
+                                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                                    ).apply { setMargins(0, dp(6), 0, 0) }
+                                },
+                            )
                         }
                         containerList.addView(coinCard)
                     } catch (e: LightCoreException) {
@@ -680,6 +701,60 @@ class MainActivity : Activity() {
         } catch (e: LightCoreException) {
             certStatus.text = "Record REFUSED: ${e.message}"
         }
+    }
+
+    // ---- Note proofs (0.6.0) ----
+
+    /**
+     * Check a saved node `note.proof` reply against the
+     * already-verified certificate stored for its epoch. The
+     * certificate is the trust anchor: the proof must name
+     * that certificate's own epoch and companion root, and
+     * its paths must compose under that root (poe-store's
+     * verifier, via poe-mobile). Plain words out.
+     */
+    private fun verifyImportedProof(bytes: ByteArray) {
+        val json = String(bytes, Charsets.UTF_8)
+        val epoch = noteProofEpoch(json)
+        if (epoch == null) {
+            containerStatus.text = "That file is not a coin proof from a node."
+            pendingProofCoin = null
+            return
+        }
+        val certFile = File(filesDir, "cert-$epoch.bin")
+        if (!certFile.exists()) {
+            containerStatus.text =
+                "No checked network record for epoch $epoch yet. " +
+                    "Check that record first (in \u201cCheck the network\u201d), then prove the coin."
+            pendingProofCoin = null
+            return
+        }
+        try {
+            val verdict = verifyNoteProofJson(json, certFile.readBytes())
+            val wanted = pendingProofCoin
+            containerStatus.text = when {
+                wanted != null && verdict.coin != wanted ->
+                    "That proof is for coin ${verdict.coin}, not coin $wanted."
+                else ->
+                    "Proven: coin ${verdict.coin} was live at the close of " +
+                        "epoch ${verdict.epoch} \u2014 checked against the network " +
+                        "record you already verified."
+            }
+        } catch (e: LightCoreException) {
+            val msg = e.message ?: ""
+            containerStatus.text = when {
+                msg.contains("EpochMismatch") ->
+                    "That proof is for a different epoch than the record you checked."
+                msg.contains("CompanionMismatch") ->
+                    "That proof does not belong to the network record you checked."
+                msg.contains("ProofRefused") ->
+                    "Not proven: the network record does not show this coin as live at that epoch."
+                msg.contains("bad note proof") ->
+                    "That file is not a coin proof from a node."
+                else -> "Proof refused: $msg"
+            }
+        }
+        pendingProofCoin = null
     }
 
     private fun verifiedText(s: CertSummary, bootstrapped: Boolean): String =
@@ -790,6 +865,7 @@ class MainActivity : Activity() {
             REQ_CONTAINER -> importContainer(bytes)
             REQ_CERT -> verifyImportedCertificate(bytes)
             REQ_TAGS -> scanTagStream(bytes)
+            REQ_PROOF -> verifyImportedProof(bytes)
         }
     }
 
@@ -827,6 +903,7 @@ class MainActivity : Activity() {
         private const val REQ_CONTAINER = 41
         private const val REQ_CERT = 42
         private const val REQ_TAGS = 43
+        private const val REQ_PROOF = 44
         private const val BOOK_NAME = "detection-book"
         private const val CHAIN_FILE = "cert-chain.txt"
 

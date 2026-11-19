@@ -953,3 +953,37 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     The image is DEV/TESTNET ONLY (file-stub vault, empty
     trust, unsigned manifest). standalone/README.md now
     records this status.
+
+34. **In-app note-proof verification — Android 0.6.0**
+    (2026-11-19). The last light-duty device item from the
+    design note's build order: the phone now checks that a
+    coin it holds was live at an epoch's close. poe-mobile
+    gains `verify_note_proof_json` (plus the selection aid
+    `note_proof_epoch`): it parses the node's `note.proof`
+    control reply — the whole `{"ok":true,"result":{…}}`
+    line or the bare result object, via a minimal reader
+    with the same u64-only discipline as the node's own
+    parser — and verifies it with poe-store's
+    `verify_note_proof` against the companion root of a
+    certificate the app has already verified and stored.
+    The proof's epoch and companion root must be the
+    certificate's own (refusals name the mismatch:
+    EpochMismatch / CompanionMismatch / ProofRefused);
+    a node refusal line is a document refusal, not a
+    verification failure. Android: each held coin gains
+    "Prove it's live" — pick the saved proof file; the app
+    selects the stored certificate for the proof's epoch
+    (and says, in plain words, to check that record first
+    if it has none) and answers in plain words. poe-mobile
+    now depends on poe-store and poe-kernel for this
+    surface; no protocol code changed. Battery: the new
+    poe-mobile test drives a genesis reserve proof in the
+    node's exact format against a certificate naming the
+    genesis companion root, plus the three named refusals
+    and the document refusals. The on-device fixture pair
+    (an epoch-1 certificate chaining onto the existing
+    epoch-0 fixture, its companion root being the real
+    root of a ledger where coin 7 is live, and the
+    matching proof reply) is generated, self-checked
+    through the app surface, and delivered with 0.6.0;
+    the on-device run is the owner's.

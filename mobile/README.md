@@ -12,9 +12,20 @@ poe-wallet and poe-finality.
 
 ## Android — built here
 
-`android/poe-suite-android-0.5.1.apk` (arm64, minSdk 28)
+`android/poe-suite-android-0.6.0.apk` (arm64, minSdk 28)
 is built and signature-verified (same debug certificate as
-0.1.0–0.5.0, so it installs as an upgrade). **0.5.1 is the
+0.1.0–0.5.1, so it installs as an upgrade). **0.6.0 adds
+in-app note-proof verification** (2026-11-19): each held
+coin gains "Prove it's live" — pick a saved node
+`note.proof` reply and the app verifies it against the
+companion root of the already-verified certificate stored
+for that epoch (poe-mobile's `verify_note_proof_json`
+over poe-store's verifier; refusals named EpochMismatch /
+CompanionMismatch / ProofRefused and phrased in plain
+words). The check pair for the device: import
+`sample-cert-epoch1.bin` in "Check the network" (it
+chains onto the epoch-0 fixture), then prove coin 7 with
+`sample-note-proof-coin7.json`. **0.5.1 was the
 artwork swap** (2026-11-18): the owners' real Concept 2
 ring replaces the description-rendered one — launcher
 icons at five densities plus the in-app header mark,

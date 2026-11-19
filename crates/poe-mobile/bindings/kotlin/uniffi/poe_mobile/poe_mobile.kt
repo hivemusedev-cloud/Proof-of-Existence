@@ -768,6 +768,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -841,9 +845,13 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_poe_mobile_fn_func_machine_id_for_public_key(`publicKey`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
+    fun uniffi_poe_mobile_fn_func_note_proof_epoch(`proofJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_poe_mobile_fn_func_testnet_root_public_key(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_poe_mobile_fn_func_verify_certificate_bytes(`bytes`: RustBuffer.ByValue,`rootPublicKey`: RustBuffer.ByValue,`expectedPrevRoot`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_poe_mobile_fn_func_verify_note_proof_json(`proofJson`: RustBuffer.ByValue,`certBytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_poe_mobile_fn_func_verify_signature(`publicKey`: RustBuffer.ByValue,`message`: RustBuffer.ByValue,`signature`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
@@ -965,9 +973,13 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_poe_mobile_checksum_func_machine_id_for_public_key(
     ): Short
+    fun uniffi_poe_mobile_checksum_func_note_proof_epoch(
+    ): Short
     fun uniffi_poe_mobile_checksum_func_testnet_root_public_key(
     ): Short
     fun uniffi_poe_mobile_checksum_func_verify_certificate_bytes(
+    ): Short
+    fun uniffi_poe_mobile_checksum_func_verify_note_proof_json(
     ): Short
     fun uniffi_poe_mobile_checksum_func_verify_signature(
     ): Short
@@ -1034,10 +1046,16 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_poe_mobile_checksum_func_machine_id_for_public_key() != 42406.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_poe_mobile_checksum_func_note_proof_epoch() != 29431.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_poe_mobile_checksum_func_testnet_root_public_key() != 47801.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_poe_mobile_checksum_func_verify_certificate_bytes() != 55972.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_poe_mobile_checksum_func_verify_note_proof_json() != 30240.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_poe_mobile_checksum_func_verify_signature() != 65506.toShort()) {
@@ -2580,6 +2598,60 @@ public object FfiConverterTypeDetectionHit: FfiConverterRustBuffer<DetectionHit>
 
 
 /**
+ * A verified note-liveness verdict: the note a proof names,
+ * shown live at the close of `epoch` under the companion root
+ * of the certificate it was checked against. The app phrases
+ * this for the user; the fields are the proof's own note.
+ */
+data class NoteProofVerdict (
+    var `epoch`: kotlin.ULong, 
+    var `coin`: kotlin.ULong, 
+    var `nf`: kotlin.ULong, 
+    var `asset`: kotlin.ULong, 
+    var `value`: kotlin.ULong, 
+    var `born`: kotlin.ULong
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeNoteProofVerdict: FfiConverterRustBuffer<NoteProofVerdict> {
+    override fun read(buf: ByteBuffer): NoteProofVerdict {
+        return NoteProofVerdict(
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: NoteProofVerdict) = (
+            FfiConverterULong.allocationSize(value.`epoch`) +
+            FfiConverterULong.allocationSize(value.`coin`) +
+            FfiConverterULong.allocationSize(value.`nf`) +
+            FfiConverterULong.allocationSize(value.`asset`) +
+            FfiConverterULong.allocationSize(value.`value`) +
+            FfiConverterULong.allocationSize(value.`born`)
+    )
+
+    override fun write(value: NoteProofVerdict, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`epoch`, buf)
+            FfiConverterULong.write(value.`coin`, buf)
+            FfiConverterULong.write(value.`nf`, buf)
+            FfiConverterULong.write(value.`asset`, buf)
+            FfiConverterULong.write(value.`value`, buf)
+            FfiConverterULong.write(value.`born`, buf)
+    }
+}
+
+
+
+/**
  * One offline show, as handed to a terminal: the triple a
  * merchant's policy checks, and two of which (at different
  * challenges) would unmask the coin's line secret — the
@@ -2735,6 +2807,17 @@ sealed class LightCoreException: kotlin.Exception() {
             get() = "reason=${ `reason` }"
     }
     
+    /**
+     * A note-proof document is not the node's `note.proof` output.
+     */
+    class BadProof(
+        
+        val `reason`: kotlin.String
+        ) : LightCoreException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
 
     companion object ErrorHandler : UniffiRustCallStatusErrorHandler<LightCoreException> {
         override fun lift(error_buf: RustBuffer.ByValue): LightCoreException = FfiConverterTypeLightCoreError.lift(error_buf)
@@ -2763,6 +2846,9 @@ public object FfiConverterTypeLightCoreError : FfiConverterRustBuffer<LightCoreE
             4 -> LightCoreException.BadDetection(
                 FfiConverterString.read(buf),
                 )
+            5 -> LightCoreException.BadProof(
+                FfiConverterString.read(buf),
+                )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -2789,6 +2875,11 @@ public object FfiConverterTypeLightCoreError : FfiConverterRustBuffer<LightCoreE
                 4UL
                 + FfiConverterString.allocationSize(value.`reason`)
             )
+            is LightCoreException.BadProof -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
         }
     }
 
@@ -2811,6 +2902,11 @@ public object FfiConverterTypeLightCoreError : FfiConverterRustBuffer<LightCoreE
             }
             is LightCoreException.BadDetection -> {
                 buf.putInt(4)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is LightCoreException.BadProof -> {
+                buf.putInt(5)
                 FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
@@ -2963,6 +3059,21 @@ public object FfiConverterSequenceTypeShowInfo: FfiConverterRustBuffer<List<Show
     
 
         /**
+         * The epoch a note-proof document claims, without verifying
+         * anything — a selection aid so the app can pick the stored
+         * certificate for that epoch before calling
+         * `verify_note_proof_json`. Never present it as verified.
+         */ fun `noteProofEpoch`(`proofJson`: kotlin.String): kotlin.ULong? {
+            return FfiConverterOptionalULong.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_func_note_proof_epoch(
+        FfiConverterString.lower(`proofJson`),_status)
+}
+    )
+    }
+    
+
+        /**
          * The poe-testnet-1 attestation root's public key (public by
          * design; copied verbatim from crates/poe-node/testnet-1.spec).
          */ fun `testnetRootPublicKey`(): kotlin.ByteArray {
@@ -2986,6 +3097,26 @@ public object FfiConverterSequenceTypeShowInfo: FfiConverterRustBuffer<List<Show
     uniffiRustCallWithError(LightCoreException) { _status ->
     UniffiLib.INSTANCE.uniffi_poe_mobile_fn_func_verify_certificate_bytes(
         FfiConverterByteArray.lower(`bytes`),FfiConverterByteArray.lower(`rootPublicKey`),FfiConverterByteArray.lower(`expectedPrevRoot`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Verify a node's `note.proof` reply against a certificate
+         * the app has already verified: the proof's epoch and
+         * companion root must be the certificate's own, and the
+         * proof itself must pass poe-store's `verify_note_proof`
+         * under that root — the note was live (born, and its
+         * nullifier unspent) at that epoch's close. The certificate
+         * is the trust anchor: the caller passes the bytes of a
+         * certificate it chained and stored, never a fresh file.
+         */
+    @Throws(LightCoreException::class) fun `verifyNoteProofJson`(`proofJson`: kotlin.String, `certBytes`: kotlin.ByteArray): NoteProofVerdict {
+            return FfiConverterTypeNoteProofVerdict.lift(
+    uniffiRustCallWithError(LightCoreException) { _status ->
+    UniffiLib.INSTANCE.uniffi_poe_mobile_fn_func_verify_note_proof_json(
+        FfiConverterString.lower(`proofJson`),FfiConverterByteArray.lower(`certBytes`),_status)
 }
     )
     }

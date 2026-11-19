@@ -2849,6 +2849,8 @@ dependencies = [
  "poe-dag",
  "poe-finality",
  "poe-identity",
+ "poe-kernel",
+ "poe-store",
  "poe-wallet",
  "rand 0.8.8",
  "uniffi",

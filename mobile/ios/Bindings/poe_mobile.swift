@@ -1483,6 +1483,110 @@ public func FfiConverterTypeDetectionHit_lower(_ value: DetectionHit) -> RustBuf
 
 
 /**
+ * A verified note-liveness verdict: the note a proof names,
+ * shown live at the close of `epoch` under the companion root
+ * of the certificate it was checked against. The app phrases
+ * this for the user; the fields are the proof's own note.
+ */
+public struct NoteProofVerdict {
+    public var epoch: UInt64
+    public var coin: UInt64
+    public var nf: UInt64
+    public var asset: UInt64
+    public var value: UInt64
+    public var born: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(epoch: UInt64, coin: UInt64, nf: UInt64, asset: UInt64, value: UInt64, born: UInt64) {
+        self.epoch = epoch
+        self.coin = coin
+        self.nf = nf
+        self.asset = asset
+        self.value = value
+        self.born = born
+    }
+}
+
+
+
+extension NoteProofVerdict: Equatable, Hashable {
+    public static func ==(lhs: NoteProofVerdict, rhs: NoteProofVerdict) -> Bool {
+        if lhs.epoch != rhs.epoch {
+            return false
+        }
+        if lhs.coin != rhs.coin {
+            return false
+        }
+        if lhs.nf != rhs.nf {
+            return false
+        }
+        if lhs.asset != rhs.asset {
+            return false
+        }
+        if lhs.value != rhs.value {
+            return false
+        }
+        if lhs.born != rhs.born {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(epoch)
+        hasher.combine(coin)
+        hasher.combine(nf)
+        hasher.combine(asset)
+        hasher.combine(value)
+        hasher.combine(born)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNoteProofVerdict: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NoteProofVerdict {
+        return
+            try NoteProofVerdict(
+                epoch: FfiConverterUInt64.read(from: &buf), 
+                coin: FfiConverterUInt64.read(from: &buf), 
+                nf: FfiConverterUInt64.read(from: &buf), 
+                asset: FfiConverterUInt64.read(from: &buf), 
+                value: FfiConverterUInt64.read(from: &buf), 
+                born: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NoteProofVerdict, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.epoch, into: &buf)
+        FfiConverterUInt64.write(value.coin, into: &buf)
+        FfiConverterUInt64.write(value.nf, into: &buf)
+        FfiConverterUInt64.write(value.asset, into: &buf)
+        FfiConverterUInt64.write(value.value, into: &buf)
+        FfiConverterUInt64.write(value.born, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNoteProofVerdict_lift(_ buf: RustBuffer) throws -> NoteProofVerdict {
+    return try FfiConverterTypeNoteProofVerdict.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNoteProofVerdict_lower(_ value: NoteProofVerdict) -> RustBuffer {
+    return FfiConverterTypeNoteProofVerdict.lower(value)
+}
+
+
+/**
  * One offline show, as handed to a terminal: the triple a
  * merchant's policy checks, and two of which (at different
  * challenges) would unmask the coin's line secret — the
@@ -1654,6 +1758,11 @@ public enum LightCoreError {
      */
     case BadDetection(reason: String
     )
+    /**
+     * A note-proof document is not the node's `note.proof` output.
+     */
+    case BadProof(reason: String
+    )
 }
 
 
@@ -1680,6 +1789,9 @@ public struct FfiConverterTypeLightCoreError: FfiConverterRustBuffer {
             reason: try FfiConverterString.read(from: &buf)
             )
         case 4: return .BadDetection(
+            reason: try FfiConverterString.read(from: &buf)
+            )
+        case 5: return .BadProof(
             reason: try FfiConverterString.read(from: &buf)
             )
 
@@ -1711,6 +1823,11 @@ public struct FfiConverterTypeLightCoreError: FfiConverterRustBuffer {
         
         case let .BadDetection(reason):
             writeInt(&buf, Int32(4))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .BadProof(reason):
+            writeInt(&buf, Int32(5))
             FfiConverterString.write(reason, into: &buf)
             
         }
@@ -1848,6 +1965,19 @@ public func machineIdForPublicKey(publicKey: Data) -> UInt64 {
 })
 }
 /**
+ * The epoch a note-proof document claims, without verifying
+ * anything — a selection aid so the app can pick the stored
+ * certificate for that epoch before calling
+ * `verify_note_proof_json`. Never present it as verified.
+ */
+public func noteProofEpoch(proofJson: String) -> UInt64? {
+    return try!  FfiConverterOptionUInt64.lift(try! rustCall() {
+    uniffi_poe_mobile_fn_func_note_proof_epoch(
+        FfiConverterString.lower(proofJson),$0
+    )
+})
+}
+/**
  * The poe-testnet-1 attestation root's public key (public by
  * design; copied verbatim from crates/poe-node/testnet-1.spec).
  */
@@ -1869,6 +1999,24 @@ public func verifyCertificateBytes(bytes: Data, rootPublicKey: Data, expectedPre
         FfiConverterData.lower(bytes),
         FfiConverterData.lower(rootPublicKey),
         FfiConverterData.lower(expectedPrevRoot),$0
+    )
+})
+}
+/**
+ * Verify a node's `note.proof` reply against a certificate
+ * the app has already verified: the proof's epoch and
+ * companion root must be the certificate's own, and the
+ * proof itself must pass poe-store's `verify_note_proof`
+ * under that root — the note was live (born, and its
+ * nullifier unspent) at that epoch's close. The certificate
+ * is the trust anchor: the caller passes the bytes of a
+ * certificate it chained and stored, never a fresh file.
+ */
+public func verifyNoteProofJson(proofJson: String, certBytes: Data)throws  -> NoteProofVerdict {
+    return try  FfiConverterTypeNoteProofVerdict.lift(try rustCallWithError(FfiConverterTypeLightCoreError.lift) {
+    uniffi_poe_mobile_fn_func_verify_note_proof_json(
+        FfiConverterString.lower(proofJson),
+        FfiConverterData.lower(certBytes),$0
     )
 })
 }
@@ -1918,10 +2066,16 @@ private var initializationResult: InitializationResult = {
     if (uniffi_poe_mobile_checksum_func_machine_id_for_public_key() != 42406) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_poe_mobile_checksum_func_note_proof_epoch() != 29431) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_poe_mobile_checksum_func_testnet_root_public_key() != 47801) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_poe_mobile_checksum_func_verify_certificate_bytes() != 55972) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_poe_mobile_checksum_func_verify_note_proof_json() != 30240) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_poe_mobile_checksum_func_verify_signature() != 65506) {
