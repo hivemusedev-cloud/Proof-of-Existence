@@ -288,6 +288,31 @@ the operator, fixed 2026-11-14 with regression tests:
     behaviour. The mitigations are timing-based, and the
     operators do not claim they are a proof.
 
+15. **Cold-resume announcement starvation (liveness, found
+    2026-11-20; fixed the same day — README correction 37).**
+    A finstate resume starts with an empty announcement
+    table: only bundle syncs pre-register the machine set,
+    a resume registers only itself, and its one startup
+    publication fires before the gossip mesh forms.
+    Registrations landed only at round boundaries, so three
+    nodes resumed together parked inside the first round's
+    hold — which pumps buffers but never landed
+    registrations — waiting for peer material that could
+    not be submitted for unregistered machines. Any cold
+    restart of the whole mesh stranded it the same way, a
+    direct threat to the Stage 2 soak's consecutive-days
+    criterion on a host with frequent replacements. Fix:
+    the waiting loops (catch-up dwell, settled-hold,
+    end-of-round park) run an announcement tick on the
+    serve tick's cadence — land buffered registrations,
+    flush the reveals waiting on them, re-publish the
+    node's own announcement with a fresh nonce. Verified
+    live: three cold resumes from the epoch-218 state
+    closed epochs 219 and 220 unanimously. The pattern is
+    the same class as findings 12–14 (resume-state
+    assumptions); the operators note it took a real cold
+    restart of the full mesh to expose, as with finding 12.
+
 An auditor should re-derive each of these from the code and the
 issue history rather than trusting this summary, and should look
 for the same classes (arrival-order dependence, resume-state

@@ -1224,6 +1224,93 @@ impl Node {
         }
     }
 
+    /// Land every buffered announcement: register each new
+    /// machine, extend the serve window toward any peer whose
+    /// announced position is behind mine, and widen the serve
+    /// window when a new machine appears. This is the exact
+    /// block that runs at the top of process_round; correction
+    /// 37 factored it out because the round boundary is not
+    /// the only place it may run — see announcement_tick.
+    fn land_announcements(&mut self, epoch: u64, round: u64) {
+        let rpe = self.spec.rounds_per_epoch;
+        let pending = std::mem::take(&mut self.pending_ann);
+        let mut new_machine = false;
+        for a in &pending {
+            if self.register_announcement(a, epoch) {
+                new_machine = true;
+            }
+            // A peer whose announced position is behind mine needs
+            // history I hold: extend my serve window to cover its
+            // gap, and let the serve range start at its position.
+            // (The serve cursor used to learn positions only from
+            // NEW registrations — a known machine returning behind,
+            // e.g. an operator node rejoining after a redeploy, was
+            // served only the frontier's own epoch and stranded.)
+            // Without the window extension, a finstate-resumed
+            // node's serve window stayed shut (it is raised for
+            // bundle joiners and new registrations only), and a
+            // reveal or vote lost in a mesh-formation race was never
+            // re-served — the loser held its round forever while
+            // the owner raced on (the 2026-11-14 anchor deadlock).
+            if a.sync_hint < self.next_apply {
+                self.history_until = self.history_until.max(self.next_apply + rpe);
+                self.catchup_from = Some(match self.catchup_from {
+                    Some(h) => h.min(a.sync_hint),
+                    None => a.sync_hint,
+                });
+            }
+        }
+        if new_machine {
+            // Someone may be catching up from a bundle: re-serve the
+            // epoch history for the next two epochs.
+            self.history_until = self.history_until.max(round + 2 * rpe);
+        }
+    }
+
+    /// Publish my own announcement. The sync hint tracks my
+    /// CURRENT apply point, so peers serve history from where I
+    /// actually am, not from where I first synced. The nonce
+    /// makes the republication a fresh gossip message —
+    /// identical bytes would be suppressed as a duplicate.
+    fn announce_self(&mut self, nonce: u64) {
+        let mut ann = self.my_announcement.clone();
+        ann.sync_hint = self.next_apply;
+        let _ = self
+            .net
+            .publish(TOPIC_ACTS, framed(5, nonce, &encode_announcement(&ann)));
+    }
+
+    /// The announcement tick for the waiting loops (correction
+    /// 37): land buffered announcements, submit the reveals
+    /// that were buffered waiting for them, and re-publish my
+    /// own announcement. Registrations used to land ONLY at
+    /// round boundaries, so every node samples committees from
+    /// the same machine set — but a node parked in a hold never
+    /// reaches a boundary. A cold finstate resume starts with
+    /// an empty announcement table (only bundle syncs
+    /// pre-register; a resume registers only itself, and its
+    /// one startup publication fires before the gossip mesh
+    /// has formed), so on 2026-11-20 all three resumed nodes
+    /// held round 3504 indefinitely: peer reveals could not
+    /// be submitted (unknown machine), peer material never
+    /// registered, and the boundary that would have landed
+    /// the registrations was never reached. Landing a
+    /// registration mid-hold freezes nothing by itself: the
+    /// close still waits for the quiescence settle, and the
+    /// reveals a registration unlocks change the round's
+    /// material signature, which restarts that settle — the
+    /// sets converge before any close, as with reveals
+    /// themselves (correction 35, F8).
+    fn announcement_tick(&mut self, epoch: u64, round: u64, now_ms: u128) {
+        if !self.pending_ann.is_empty() {
+            self.land_announcements(epoch, round);
+            // Registrations just landed: submit the reveals
+            // that were buffered waiting for them.
+            self.flush_reveals();
+        }
+        self.announce_self(now_ms as u64);
+    }
+
     fn handle_inbound(&mut self, inb: poe_net::Inbound) {
         // Gossip framing: tag (1 byte) + nonce (8 bytes) + body. The
         // nonce makes every republication a fresh gossip message —
@@ -2181,51 +2268,18 @@ impl Node {
         // Bound the retained history (see HISTORY_RETENTION_EPOCHS).
         self.fin
             .prune_before(round.saturating_sub(HISTORY_RETENTION_EPOCHS * rpe));
-        // Registrations land at round boundaries only, so every node
-        // samples committees from the same machine set.
-        let pending = std::mem::take(&mut self.pending_ann);
-        let mut new_machine = false;
-        for a in &pending {
-            if self.register_announcement(a, epoch) {
-                new_machine = true;
-            }
-            // A peer whose announced position is behind mine needs
-            // history I hold: extend my serve window to cover its
-            // gap, and let the serve range start at its position.
-            // (The serve cursor used to learn positions only from
-            // NEW registrations — a known machine returning behind,
-            // e.g. an operator node rejoining after a redeploy, was
-            // served only the frontier's own epoch and stranded.)
-            // Without the window extension, a finstate-resumed
-            // node's serve window stayed shut (it is raised for
-            // bundle joiners and new registrations only), and a
-            // reveal or vote lost in a mesh-formation race was never
-            // re-served — the loser held its round forever while
-            // the owner raced on (the 2026-11-14 anchor deadlock).
-            if a.sync_hint < self.next_apply {
-                self.history_until = self.history_until.max(self.next_apply + rpe);
-                self.catchup_from = Some(match self.catchup_from {
-                    Some(h) => h.min(a.sync_hint),
-                    None => a.sync_hint,
-                });
-            }
-        }
-        if new_machine {
-            // Someone may be catching up from a bundle: re-serve the
-            // epoch history for the next two epochs.
-            self.history_until = self.history_until.max(round + 2 * rpe);
-        }
-        // Re-announce myself (late joiners learn the machine set this
-        // way). The sync hint tracks my CURRENT apply point, so peers
-        // serve history from where I actually am, not from where I
-        // first synced.
-        let mut ann = self.my_announcement.clone();
-        ann.sync_hint = self.next_apply;
-        let _ = self
-            .net
-            .publish(TOPIC_ACTS, framed(5, round, &encode_announcement(&ann)));
-        // Registrations just landed: submit the reveals that were
-        // buffered waiting for them.
+        // Registrations land at round boundaries, so every node
+        // samples committees from the same machine set. (They
+        // also land on the waiting loops' announcement ticks —
+        // correction 37: a node parked in a hold never reaches
+        // a boundary, and a cold resume starts with an empty
+        // table. See announcement_tick.)
+        self.land_announcements(epoch, round);
+        // Re-announce myself (late joiners learn the machine set
+        // this way).
+        self.announce_self(round);
+        // Registrations just landed: submit the reveals that
+        // were buffered waiting for them.
         self.flush_reveals();
         if !observing {
             // One last push of my own reveal for THIS round (fresh
@@ -2281,6 +2335,7 @@ impl Node {
                 let mut last_hold_log = 0u128;
                 let mut last_repush = 0u128;
                 let mut last_serve = 0u128;
+                let mut last_ann = 0u128;
                 let mut anchor_reveal_sent = false;
                 let mut material_since: Option<u128> = None;
                 loop {
@@ -2412,6 +2467,14 @@ impl Node {
                         self.serve_history(round);
                         last_serve = now_ms;
                     }
+                    // Announcement tick (correction 37): this
+                    // dwell may never reach the round boundary
+                    // where registrations used to land — a cold
+                    // resume's empty table can only fill here.
+                    if now_ms >= last_ann + 5_000 {
+                        self.announcement_tick(epoch, round, now_ms);
+                        last_ann = now_ms;
+                    }
                     let step_end = if now_ms < dwell_end {
                         (now_ms + 150).min(dwell_end)
                     } else {
@@ -2469,6 +2532,7 @@ impl Node {
             let mut last_hold_log = 0u128;
             let mut last_repush = 0u128;
             let mut last_serve = 0u128;
+            let mut last_ann = 0u128;
             // For a PAST round, first material is not enough
             // (correction 35): close_round_reveals below freezes
             // the draw denominator from the reveal set present at
@@ -2590,6 +2654,18 @@ impl Node {
                 if now_ms >= last_serve + 5_000 {
                     self.serve_history(round);
                     last_serve = now_ms;
+                }
+                // Announcement tick (correction 37), as in the
+                // catch-up dwell: this hold is where the cold-
+                // resume stall parked all three nodes — the
+                // boundary that lands registrations sits after
+                // it. A registration landing here restarts the
+                // quiescence settle through the reveals it
+                // unlocks, so the close still freezes a
+                // converged set.
+                if now_ms >= last_ann + 5_000 {
+                    self.announcement_tick(epoch, round, now_ms);
+                    last_ann = now_ms;
                 }
                 self.pump_until(now_ms + 150).await;
             }
@@ -2905,6 +2981,7 @@ impl Node {
                     .unwrap_or(0);
                 let mut last_serve = 0u128;
                 let mut last_log = 0u128;
+                let mut last_ann = 0u128;
                 while !self.fin.finalized.contains_key(&anchor) {
                     let now_ms = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -2924,6 +3001,15 @@ impl Node {
                     if now_ms - last_serve >= 5_000 {
                         last_serve = now_ms;
                         self.serve_history(round);
+                    }
+                    // Announcement tick (correction 37), as in
+                    // the dwell and the settled-hold: a park can
+                    // outlast a peer's restart, and the votes
+                    // this node waits on may be stuck behind a
+                    // registration that has not landed here.
+                    if now_ms - last_ann >= 5_000 {
+                        last_ann = now_ms;
+                        self.announcement_tick(epoch, round, now_ms);
                     }
                     if now_ms - last_log >= 15_000 {
                         last_log = now_ms;

@@ -1138,3 +1138,33 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     question — how a catching-up node proves its reveal
     set complete before freezing it — remains the
     auditors'.
+37. **Cold-resume announcement starvation (2026-11-20):**
+    after the VM replacement that interrupted the first
+    soak start, all three nodes resumed from finstate at
+    round 3504 and held there indefinitely — "no peer
+    material" on every node, each waiting on the others.
+    A finstate resume starts with an empty announcement
+    table (only bundle syncs pre-register the machine set;
+    a resume registers only itself, and its one startup
+    publication fires before the gossip mesh has formed),
+    and registrations landed only at round boundaries —
+    which a node parked inside a round's hold never
+    reaches. The waiting loops (catch-up dwell,
+    settled-hold, end-of-round park) now run an
+    announcement tick on the serve tick's 5 s cadence:
+    land buffered registrations (the same block that runs
+    at the boundary, factored out as land_announcements),
+    submit the reveals that were buffered waiting for
+    them, and re-publish the node's own announcement with
+    a fresh nonce. A registration landing mid-hold freezes
+    nothing by itself: the reveals it unlocks change the
+    round's material signature and restart the quiescence
+    settle, so the close still freezes a converged set.
+    Verified live the same day: relaunched as finstate
+    resumes from the epoch-218 state (not a re-anchor),
+    each node logged exactly one HOLD for round 3504
+    before the first tick landed, then epoch 219 closed
+    on all three under one root (cbc36cb7…) and 220
+    followed (492e5ae4…), certificates on all three. The
+    soak restarts from this state. AUDIT_PACKAGE
+    finding 15.

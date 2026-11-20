@@ -735,3 +735,29 @@ PRUNE lines at the 215/216 closes: the prune call logs
 only when it drops, and the 215 anchor round (3440)
 finalized NULL, so there was no block anchor to prune
 from; earlier live PRUNE lines stand at epochs 210–214.
+
+## Ops entry 2026-11-20 (evening) — soak interrupted, correction 37, soak restarted
+
+A VM replacement at ~15:22 +06 wiped the transient
+poe-rec units mid-soak-start. Before the kill the mesh
+had closed epoch 218 on all three (root
+95257638fc7c5186, CERT votes=3, cert-218.bin on all
+three). Relaunched as finstate resumes, all three
+resumed cleanly at round 3504 / epoch 219 and then
+parked in HOLD 3504 indefinitely: a finstate resume
+starts with an empty announcement table, registrations
+landed only at round boundaries, and a node inside a
+hold never reaches one (README correction 37,
+AUDIT_PACKAGE finding 15). Fix shipped the same
+evening: announcement ticks in the dwell, settled-hold
+and park loops. Relaunched again as finstate resumes
+from the epoch-218 state on the fixed binary: one HOLD
+line for 3504 per node, then epoch 219 closed on all
+three under one root (cbc36cb777408216, certs on all
+three) and epoch 220 followed (492e5ae478621744).
+CERT lines now report announcements=3 — the cold-resume
+tables hold exactly the three live machines, registered
+over gossip, where bundle starts carry the historical
+set of 8. The soak clock restarts from the epoch-219
+close (~20:1x +06), mesh left running, node1 not
+peered to Railway (peering remains the owner's call).
