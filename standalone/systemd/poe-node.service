@@ -19,7 +19,13 @@ Wants=network-online.target
 Type=simple
 User=poe
 Group=poe
-ExecStart=/usr/lib/poe/poe-node testnet --dir /data/poe-node
+# Start via the wrapper: a fresh data dir (no store yet) must
+# start from the bundle firstboot staged into it — a plain
+# start on an empty dir is refused by design (the chain has
+# already started). The wrapper passes --sync-from only while
+# no store exists; afterwards the plain start's finstate ->
+# bundle -> refuse discipline applies (defect D7, 2026-11-20).
+ExecStart=/usr/lib/poe/start.sh
 # The standalone vault backend (secure element, preparation
 # document section 5) lands with the Phase 3 build; its
 # selection line is enabled then, in the same form app-mode

@@ -4,7 +4,11 @@ Prepared 2026-11-14 for an external auditor; refreshed
 2026-11-17 (the owners settled the open design questions that
 day — two-caps, liveness adoption, the V2 gate rule — and the
 light-duty additions #1/#2 were built; the engagement cover is
-`AUDIT_ENGAGEMENT.md`). This document is the map: what the code
+`AUDIT_ENGAGEMENT.md`). Refreshed again 2026-11-20: first live
+epoch closes and certificates on the local mesh (epochs
+210–214), the skip attestation live-proved, findings 12–14
+added (the mesh re-drive, README correction 35), and the
+standalone D4/D5/D7 defects resolved with dispositions. This document is the map: what the code
 is, how to build and verify it, what has already been found (by
 the operator, by the public testnet, and by an independent
 tester), and where the open questions live. Nothing in this
@@ -217,6 +221,62 @@ the operator, fixed 2026-11-14 with regression tests:
     the fold itself remains algebraic pending the external ZK
     review (see "What is NOT claimed").
 
+12. **Skip attestation unreachable through the node wiring
+    (liveness, found 2026-11-20).** The mechanism (finding
+    context: the adopted liveness cure) was correct in
+    poe-finality and in Lean, but the NODE could never deliver
+    it: votes lag one round, so skip(r) rides the vote cast in
+    process_round(r+2) — whose gate fails on r itself, sets the
+    node observing, and observing suppressed the vote. A stalled
+    round therefore sat forever while its would-be attesters
+    repeatedly observed and cast nothing. The engine-level
+    battery could not see this (it constructs votes directly).
+    Fixed: the vote step casts despite observing when the
+    observation is this round's own gate failure. Live-proved
+    the same night (`NULL round=3446` on both live nodes; a
+    unanimous 3/3 NULL of the re-anchor round 3440). An auditor
+    should treat node-wiring reachability of every engine
+    mechanism as in-scope: a proved mechanism the wiring cannot
+    invoke is not a liveness property.
+13. **Bundles carried post-sync-point finality (safety, found
+    2026-11-20).** The bundle snapshot is the base snapshot by
+    design (no working state), but its finalized map silently
+    included the sync round's own finality whenever the maker's
+    epoch close ran a round late — so two bundles for the same
+    epoch disagreed about the sync round, and joiners inherited
+    (or lacked) a decision they never took part in; in the
+    epoch-215 re-anchors this forked finality by bundle choice.
+    Fixed: write_bundle truncates finalized to the sync point.
+    An auditor should check every snapshot/restore path for the
+    same class: state a format claims not to carry, carried
+    anyway at a boundary.
+14. **Catch-up subset closes (safety, found 2026-11-20;
+    mitigations in, one liveness gap open).** close_round_reveals
+    freezes a round's participant set from whatever has arrived
+    locally. In catch-up (all deadlines past) nodes closed on
+    subsets: divergent committees for round 3361 that no message
+    could heal; an EMPTY close (committee of nobody); and a
+    committee-of-one close that NULL-finalized a round on a solo
+    attestation while peers finalized its block — the Lean
+    quorum-intersection argument assumes a common reveal set,
+    and the implementation did not guarantee one in catch-up.
+    Mitigations shipped (README correction 35): quiescence
+    settle for past-round closes (any material change restarts
+    a 6 s window), self-reveal re-derivation for unfinalized
+    rounds, the anchor exception keyed on reveals rather than
+    blocks, an end-of-round park replacing the catch-up orbit,
+    and finding 13's truncation. With them, a three-node
+    re-anchor from one identical bundle agreed unanimously on
+    every finalized round. One liveness gap remains open: a
+    node's own reveal can still be missing from its own close
+    (an observing suppression not yet pinned to its line), which
+    desynchronized one committee view by one member and left a
+    round one vote short — a stall, not a fork, in the observed
+    instance. The general question — how a catching-up node
+    proves its reveal set complete before freezing it — is
+    named here for the audit; the mitigations are timing-based,
+    and the operators do not claim they are a proof.
+
 An auditor should re-derive each of these from the code and the
 issue history rather than trusting this summary, and should look
 for the same classes (arrival-order dependence, resume-state
@@ -237,11 +297,38 @@ assumptions, unbounded recursion) elsewhere.
   correction 28): `poe-store::merkle` — sorted sections,
   inclusion/absence proofs, named in the certificate beside
   `state_root`; the state root's own formula is unchanged.
-- **Phase 3 (standalone) preparation**: a preparation document
-  and a repo skeleton (`standalone/`) — image architecture, A/B
-  update + signed-manifest rules, the owners' 2-of-3 offline
-  update-key ceremony specification. No image is built and no
-  key exists; the preparation is in scope only as documents.
+- **Phase 3 (standalone) image — built 2026-11-18** (after this
+  section's original preparation note): Debian bookworm amd64,
+  A/B read-only rootfs slots, `poe-node.service` baked, epoch-209
+  bundle baked, first-boot identity ceremony (no identity baked).
+  The `poe-update` agent implements poe-update-1 (≥2-of-3 ML-DSA
+  over the canonical manifest, anti-rollback counter, trial boot,
+  health check → bless or rollback+quarantine; battery 11/11) and
+  cannot sign; the trust store ships EMPTY and the agent verifiably
+  refuses the shipped manifest against it. The D3-fixed image boots
+  clean to a login prompt and performs its first-boot ceremony.
+  Marked DEV/TESTNET ONLY (vault is a file stub). Defects D4/D5,
+  open at the last refresh, were root-caused 2026-11-19/20 to ONE
+  mechanism — rootfs directories stamped mode 02770 root:nogroup
+  by the build sandbox, so every dedicated-user service failed at
+  exec (203/EXEC) while root services worked; the build now
+  normalizes modes and asserts none remain (README correction 35).
+  systemd-resolved additionally failed on mount namespacing
+  against the read-only root and is masked in the image as a
+  recorded design disposition (name resolution is not a node
+  dependency). D7 (found in the same pass): the baked unit
+  plain-started the node, which refuses an empty data dir; a start
+  script now syncs from the staged bundle iff no store exists.
+  With those fixes the guest node runs end-to-end (identity
+  created, bundle synced, control socket answering, HOLDing
+  peerless as designed). The final default (non-diagnostic)
+  build was made 2026-11-20 and its end-state boot
+  verification PASSED (BUILD_REPORT.md final addendum); the
+  health check's 600 s deadline is a real-hardware parameter
+  and was exceeded under emulation on a contended host — it
+  is not inflated to fit the emulator. No owner update-signing key
+  exists yet; the 2-of-3 offline ceremony is still the owners'
+  to perform.
 
 ## Standing falsifiers
 
@@ -260,9 +347,20 @@ valid claims earn public acknowledgement and fix credit.
   stability in operation and remains closed.
 - The testnet root key is public by design (anyone may
   self-attest a testnet identity); it secures nothing of value.
-- No finality certificate has been emitted on the live testnet
-  yet: node1 holds at the epoch-209 anchor without a canonical
-  peer mesh, so emission is proved on simnet epochs, not
-  observed live. The same applies to note proofs served from a
-  live close.
-- The standalone image is prepared, not built (see above).
+- Finality certificates were emitted live for the first time on
+  2026-11-20 (epochs 210–214, local three-node mesh, after the
+  correction-35 re-drive fixes; cert files on disk in the node
+  dirs). The mesh was then stopped in a consistent state with
+  one liveness gap open (finding 14); the V2 soak criteria are
+  NOT met — a few live epochs are evidence the machinery runs,
+  not the consecutive-live-days soak the gate requires. The
+  public Railway node remains on its earlier fork lineage
+  pending the owner's bundle-URL flip (rested at the owner's
+  instruction), so "live testnet" claims cover the local mesh,
+  not the public node.
+- The standalone image is built and boots, and with the D4/D5/D7
+  fixes its guest node runs end-to-end (see above), but it is
+  DEV/TESTNET ONLY: its vault is a file stub, its trust store is
+  empty (no owner update-signing key exists yet). The final
+  default build + end-state boot verification are done
+  (2026-11-20, PASSED; BUILD_REPORT.md final addendum).

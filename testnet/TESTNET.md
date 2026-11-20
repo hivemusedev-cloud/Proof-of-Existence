@@ -658,3 +658,52 @@ certificate emission remains simnet-proved, not yet
 live-observed, until a canonical peer mesh exists again.
 Railway remains on its fork lineage pending the bundle-URL
 flip (owner's dashboard action, unchanged).
+
+## Operations log — 2026-11-20: mesh re-drive, first live closes on the bounded-DAG binary, correction 35
+
+Stood the local mesh back up (node1/2/3) to produce live
+epoch closes and soak evidence. The mesh wedged at round
+3361 (divergent reveal closes from the 2026-11-14
+re-anchor); a night of diagnosis and fixes followed —
+the full account is README correction 35. Headlines:
+skip attestation was unreachable through the node wiring
+(now fixed and live-proved: `NULL round=3446 closed
+empty by skip attestation` on both live nodes); buffer
+starvation in holds; serve starvation; the catch-up
+orbit; subset/empty reveal closes; bundles silently
+carrying post-sync-point finality (now truncated at
+write time); the anchor exception keying on blocks
+instead of reveals.
+
+Two operator re-anchors were performed (the design's
+stated recovery — final state never lost, unfinalized
+tails discarded). Preserved on disk per node, not
+deleted: finstate.bin.pre-anchor-2026-11-20 +
+store.pre-anchor-2026-11-20 (first), then .held/.held2/
+.held3 (node1), .diverged-, .forked-, .orbit-,
+.forked2-, .forked3-2026-11-20 (later iterations), and
+node2/node3's bundle.bin.polluted-2026-11-20 (the
+bundles that carried round 3440's finality). The final
+run synced all three nodes from ONE identical bundle
+(node2's epoch-214 bundle, md5 1cef48288f58a5e85f517b266e99574c —
+the copy already held as node1's bundle.bin) under
+transient units poe-rec1/2/3, node1 deliberately NOT
+peered to Railway for these runs.
+
+Results: epochs 210–214 closed live with PRUNE + CERT
+(epoch 210: PRUNE dropped=6268 retained=35, CERT
+votes=2 announcements=8; certs on disk in node2/node3
+certs/). Final run agreement, verified by finstate-dump
+on all three: round 3440 NULL by 3/3 skip attestation,
+round 3441 by 3/3 tally, no conflicting finality
+anywhere. One liveness gap remains (node2's own reveal
+missing from its round-3443 close; its committee view
+differs by one member and the 3443 vote the other nodes
+wait on was never cast). The mesh was stopped on
+2026-11-20 ~04:52 +06 in that consistent state rather
+than left to drift; restart is a finstate resume per
+node (keys and bundles in place). Suite count on the
+correction-35 binary: see the 2026-11-20 test logs under
+~/workspace/poe-build-2026-11-11/test-logs-2026-11-20/.
+Railway unchanged (bundle-URL flip still the owner's
+dashboard action, rested).

@@ -55,6 +55,27 @@ fn main() {
         }
         return;
     }
+    if args.len() > 1 && args[1] == "finstate-dump" {
+        // poe-node finstate-dump <finstate.bin> [from-round] [to-round]
+        // Read-only stall diagnostic: committees, tallies, voters.
+        let Some(file) = args.get(2) else {
+            eprintln!("usage: poe-node finstate-dump <finstate.bin> [from] [to]");
+            std::process::exit(2);
+        };
+        let from: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let to: u64 = args
+            .get(4)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(from + 16);
+        match testnet::finstate_dump(std::path::Path::new(file), from, to) {
+            Ok(s) => print!("{s}"),
+            Err(e) => {
+                eprintln!("finstate-dump failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if args.len() > 1 && args[1] == "paths" {
         // The app-mode environment (Phase 1): where an installer
         // or shell puts the suite's data, and where the node's

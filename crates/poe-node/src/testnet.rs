@@ -461,7 +461,21 @@ fn write_bundle(
         w_bytes(&mut out, name.as_bytes());
         w_bytes(&mut out, bytes);
     }
-    let snap = fin.snapshot();
+    let mut snap = fin.snapshot();
+    // Correction 35 (F9): the bundle's contract is its sync point —
+    // a joiner starts deciding AT sync_round, so the snapshot must
+    // not carry finality for rounds at or after it. It silently
+    // did: the write happens at the epoch close, inside the sync
+    // round's own processing, and a maker whose close ran a round
+    // late had already finalized the sync round locally, planting
+    // a decision the joiner never took part in. In the epoch-215
+    // re-anchors, node3's bundle carried round 3440 finalized as a
+    // block while node2's carried it unfinalized — node2 then
+    // NULL-closed it on an empty reveal set, and the two
+    // finalities forked by bundle choice. Truncate to the sync
+    // point: every joiner starts from the same finalized prefix
+    // and the sync round is decided with the mesh, by all of them.
+    snap.finalized.retain(|(r, _)| *r < sync_round);
     w_u64(&mut out, snap.k);
     w_u64(&mut out, snap.rounds_per_epoch);
     w_u32(&mut out, snap.dag_blocks.len() as u32);
@@ -986,6 +1000,54 @@ fn read_finstate(path: &Path) -> io::Result<(Finality, u64)> {
         cast: counters_all.next().unwrap_or_default(),
     };
     Ok((Finality::restore_full(full), next_apply))
+}
+
+/// Operator diagnostic (`poe-node finstate-dump <file> [from] [to]`):
+/// load a finstate file read-only and print, per round, the frozen
+/// committee, the counted vote tally, the stored votes (voter, block,
+/// skip attached) and the skip tally. The live DBG lines cannot name
+/// voters; this can, which is what a stall diagnosis needs.
+pub fn finstate_dump(path: &Path, from: u64, to: u64) -> io::Result<String> {
+    let (fin, next_apply) = read_finstate(path)?;
+    let short = |b: &[u8; 64]| -> String {
+        b[..8].iter().map(|x| format!("{x:02x}")).collect()
+    };
+    let mut out = format!("next_apply={next_apply}\n");
+    for round in from..=to {
+        let state = match fin.finalized.get(&round) {
+            Some(b) if *b == poe_finality::NULL_BLOCK => "finalized=NULL".to_string(),
+            Some(b) => format!("finalized={}", short(b)),
+            None => "unfinalized".to_string(),
+        };
+        let comm = match fin.committee(round) {
+            Some(c) => format!("committee={c:?}"),
+            None => "committee=-".to_string(),
+        };
+        let tally: Vec<String> = fin
+            .vote_tally(round)
+            .iter()
+            .map(|(b, n)| format!("{}:{}", short(b), n))
+            .collect();
+        let (skips, ssize) = fin.skip_tally(round);
+        let votes: Vec<String> = fin
+            .votes_in_round(round)
+            .iter()
+            .map(|v| {
+                format!(
+                    "m{}->{}{}",
+                    v.machine,
+                    short(&v.block),
+                    if v.skip.is_some() { "+skip" } else { "" }
+                )
+            })
+            .collect();
+        out.push_str(&format!(
+            "r{round} {state} {comm} tally=[{}] skip_tally={skips}/{ssize} votes=[{}]\n",
+            tally.join(","),
+            votes.join(",")
+        ));
+    }
+    Ok(out)
 }
 
 // -- the node -----------------------------------------------------------------
@@ -1918,6 +1980,29 @@ impl Node {
             // this way at the 2026-11-14 re-anchor (each sitting on
             // the other's buffered reveal, neither able to see it).
             self.flush_reveals();
+            // Blocks and votes are buffered on arrival too (a
+            // block's parents or a round's reveal close may not be
+            // local yet) — and until correction 35 they were
+            // drained only by the finality gate and the end of
+            // process_round. A node parked in the dwell or the
+            // hold therefore never admitted the very material it
+            // was waiting for: re-served blocks sat in this buffer
+            // while peer_material read the DAG, and re-served
+            // votes sat uncounted while the round they belonged
+            // to stalled one vote short — the epoch-210 wedge,
+            // where every node held every block and vote the
+            // others needed, in buffers nobody drained. Drain on
+            // every pump, wherever the round loop is parked. The
+            // gate keeps its own stricter pass (it drops failed
+            // blocks for rounds already past); here a failed block
+            // simply stays buffered for the next pump.
+            let buffered = std::mem::take(&mut self.buffered_blocks);
+            for b in buffered {
+                if !self.propose_guarded(b.clone()) {
+                    self.buffered_blocks.push(b);
+                }
+            }
+            self.drain_votes();
             // Long waits live inside this pump (holds, dwells, the
             // finality gate), and the periodic peer re-dial sits in
             // the round loop — a node held in a round whose peer
@@ -1938,6 +2023,54 @@ impl Node {
     /// for the round, or another machine's block in it (see
     /// has_peer_material). Gates every reveal close: a node that can
     /// see no peer material must stall, never close alone.
+    /// Whether any part of this round's written history — a peer
+    /// block in the DAG or votes counted by the finality engine —
+    /// has reached this node (correction 35). A round with history
+    /// was necessarily closed by whoever produced it, so its
+    /// reveal set is fixed history; a round without any is still
+    /// unwritten everywhere this node can be bound by.
+    fn round_history_exists(&self, round: u64) -> bool {
+        !self.fin.votes_in_round(round).is_empty()
+            || self
+                .fin
+                .dag
+                .blocks()
+                .iter()
+                .any(|b| b.round == round && b.machine != self.keys.machine())
+    }
+
+    /// A change signature for a round's collected material: how
+    /// many of its blocks are in the DAG and how many reveals are
+    /// recorded for it. The settled-hold's quiescence settle
+    /// (correction 35, F8) samples this about once a second; any
+    /// change restarts the quiet window, so the reveal close
+    /// cannot freeze a set that is still arriving.
+    fn round_material_count(&self, round: u64) -> u64 {
+        let blocks = self
+            .fin
+            .dag
+            .blocks()
+            .iter()
+            .filter(|b| b.round == round)
+            .count() as u64;
+        let reveals = self
+            .announcements
+            .keys()
+            .filter(|m| self.fin.reveal_of(**m, round).is_some())
+            .count() as u64;
+        blocks * 4096 + reveals
+    }
+
+    /// Whether any OTHER machine's reveal for `round` is recorded
+    /// here. Distinct from peer_material: a peer block in the DAG
+    /// is not collection — the round's reveal phase may never have
+    /// run anywhere (the F10 anchor-round case).
+    fn peer_reveal(&self, round: u64) -> bool {
+        self.announcements
+            .keys()
+            .any(|m| *m != self.keys.machine() && self.fin.reveal_of(*m, round).is_some())
+    }
+
     fn peer_material(&self, round: u64) -> bool {
         let reveals: Vec<u64> = self
             .announcements
@@ -1954,6 +2087,73 @@ impl Node {
             .map(|b| b.machine)
             .collect();
         has_peer_material(self.keys.machine(), &reveals, &blocks)
+    }
+
+    /// Re-publish one slice of held history (blocks, reveals and
+    /// votes for rounds below `round`), cycling the serve cursor.
+    /// Serving is read-only: it never changes this node's state.
+    /// It runs once per round from process_round — and, since the
+    /// 2026-11-20 re-drive fix (README correction 35), also on a
+    /// 5-second tick inside the dwell and hold loops: a node
+    /// parked in either loop is exactly the peer a behind node
+    /// needs history from, and when serving waited for the parked
+    /// loop to end, two nodes could deadlock — each holding the
+    /// material the other was waiting for, neither able to
+    /// proceed (the epoch-210 wedge: one node holding round 3361
+    /// for want of a re-served block, its peers holding 3362 for
+    /// want of its next-round reveal, the serve block unreachable
+    /// behind both holds).
+    fn serve_history(&mut self, round: u64) {
+        let rpe = self.spec.rounds_per_epoch;
+        if round < self.history_until {
+            // Serve from the oldest sync point a recent joiner
+            // announced (rounded to its epoch start), clamped to the
+            // retained-history floor — the joiner processes on its
+            // own clock and lags the publisher's by an epoch or two,
+            // so serving only the publisher's current epoch strands
+            // it with subset committees and a solo fork.
+            let floor = round.saturating_sub(HISTORY_RETENTION_EPOCHS * rpe);
+            let from = match self.catchup_from {
+                Some(h) => (h - (h % rpe)).max(floor),
+                None => round - (round % rpe),
+            };
+            let machines: Vec<u64> = self.announcements.keys().copied().collect();
+            // Walk the range in slices of SERVE_SLICE_ROUNDS rounds
+            // per round: the full range every round is thousands of
+            // republishes and floods slow peers' queues; a joiner
+            // cycling the slices still receives every round within a
+            // few rounds. The slice size sets the catch-up speed
+            // limit: a joiner can only process rounds whose slice has
+            // come around, so its pace is slice × (server rounds per
+            // full cycle)⁻¹. At 16 rounds/slice a 1,100-round backlog
+            // cycled in ~69 server rounds and the joiner replayed at
+            // ~5 rounds/min against a 20 rounds/min wall clock — the
+            // backlog GREW (measured 2026-11-14). At 64 the same
+            // backlog cycles in ~18 server rounds and the joiner
+            // sustains ~70 rounds/min, comfortably ahead of the wall.
+            let cur = if self.serve_cursor < from || self.serve_cursor >= round {
+                from
+            } else {
+                self.serve_cursor
+            };
+            let end = (cur + SERVE_SLICE_ROUNDS).min(round);
+            self.serve_cursor = end;
+            for r in cur..end {
+                for b in self.fin.dag.blocks().into_iter().filter(|b| b.round == r) {
+                    let _ = self.net.publish(TOPIC_BLOCKS, framed(2, round, &encode_block(&b)));
+                }
+                for m in &machines {
+                    if let Some(link) = self.fin.reveal_of(*m, r) {
+                        let _ = self
+                            .net
+                            .publish(TOPIC_BLOCKS, reveal_msg(*m, r, &link, round));
+                    }
+                }
+                for v in self.fin.votes_in_round(r) {
+                    let _ = self.net.publish(TOPIC_VOTES, framed(3, round, &encode_vote(&v)));
+                }
+            }
+        }
     }
 
     async fn process_round(&mut self, round: u64, dir: &Path) -> io::Result<()> {
@@ -2064,8 +2264,23 @@ impl Node {
                 .unwrap_or(0);
             if round_end <= now_ms {
                 let dwell_end = now_ms + 2500;
+                // Correction 35 (F10): the anchor exception below
+                // asks whether this round was ever COLLECTED — a
+                // question about reveals, not blocks. Bundles carry
+                // DAG blocks (stale proposals for this very round)
+                // but never working state, so at a full re-anchor
+                // every node has peer BLOCKS for the anchor round
+                // while its reveals were collected by nobody. The
+                // blocks satisfied peer_material, the dwell exited,
+                // observing suppressed every re-derive, and the
+                // round closed on an empty set. Give served reveals
+                // one full re-publish cycle past the dwell to land;
+                // if none does, the round was never collected and
+                // the exception fires despite the blocks.
+                let anchor_deadline = dwell_end + 5_000;
                 let mut last_hold_log = 0u128;
                 let mut last_repush = 0u128;
+                let mut last_serve = 0u128;
                 let mut anchor_reveal_sent = false;
                 let mut material_since: Option<u128> = None;
                 loop {
@@ -2073,7 +2288,11 @@ impl Node {
                         .duration_since(UNIX_EPOCH)
                         .map(|d| d.as_millis())
                         .unwrap_or(0);
-                    if self.peer_material(round) {
+                    let anchor_uncollected = observing
+                        && !anchor_reveal_sent
+                        && now_ms >= anchor_deadline
+                        && !self.peer_reveal(round);
+                    if self.peer_material(round) && !anchor_uncollected {
                         // Peer material exists. If I had to inject
                         // my own anchor reveal (below), give slower
                         // peers' reveals a short settle window to
@@ -2086,7 +2305,7 @@ impl Node {
                         if now_ms >= since + 1500 {
                             break;
                         }
-                    } else if now_ms >= dwell_end {
+                    } else if now_ms >= dwell_end || anchor_uncollected {
                         if observing && !anchor_reveal_sent {
                             // No peer material for a round I am
                             // only OBSERVING (the bundle's anchor
@@ -2132,6 +2351,46 @@ impl Node {
                     // each other's reveals would otherwise wait
                     // forever, each sitting on the material the
                     // other needs.
+                    // Re-derive my own reveal first if it was never
+                    // recorded (correction 35): a node that resumed
+                    // past this round's collection point
+                    // (collect_round = start_round + 1) never ran
+                    // the reveal step for it, so its fin holds no
+                    // reveal and the re-publish below silently
+                    // never fires — while a peer holds this round
+                    // for exactly that reveal (the epoch-210
+                    // resume wedge). The chain reveal is
+                    // deterministic; submitting it is idempotent.
+                    // Observing nodes abstain: their late reveal is
+                    // the anchor exception's call, not this tick's.
+                    // For any round not yet finalized HERE
+                    // (correction 35, F7 — this guard went through
+                    // two earlier forms: first none, then "only
+                    // while the round is unwritten here". The
+                    // unwritten form abstained exactly when a peer
+                    // block had arrived first, and the node then
+                    // closed round 3440 with no reveal of its own
+                    // in the set — in the worst case an empty
+                    // participant set and a committee of nobody —
+                    // while its peers closed on the full set: a
+                    // finality fork at the close, not a stall.
+                    // A close drawn from a set that excludes the
+                    // closer can never agree with a close drawn
+                    // from the full set; a close drawn from a set
+                    // that includes the closer at least CAN agree,
+                    // and with the quiescence settle (F8) the sets
+                    // converge before either side freezes. For a
+                    // round already finalized here the reveal is
+                    // inert — its committee froze at the close —
+                    // so abstention there costs nothing.)
+                    if !observing
+                        && !self.fin.finalized.contains_key(&round)
+                        && self.fin.reveal_of(self.keys.machine(), round).is_none()
+                        && (round as usize) + 1 < CHAIN_LEN
+                    {
+                        let link = self.keys.chain_reveal((round + 1) as usize);
+                        let _ = self.fin.submit_reveal(self.keys.machine(), round, link);
+                    }
                     if now_ms >= last_repush + 5_000
                         && self.fin.reveal_of(self.keys.machine(), round).is_some()
                         && (round as usize) + 1 < CHAIN_LEN
@@ -2142,6 +2401,16 @@ impl Node {
                             reveal_msg(self.keys.machine(), round, &link, now_ms as u64),
                         );
                         last_repush = now_ms;
+                    }
+                    // Serve while holding (correction 35): the
+                    // serve block after this dwell is unreachable
+                    // until the dwell ends, and the dwell may be
+                    // waiting on the very peer that needs my
+                    // history. Serving is read-only; one slice
+                    // per 5 s tick.
+                    if now_ms >= last_serve + 5_000 {
+                        self.serve_history(round);
+                        last_serve = now_ms;
                     }
                     let step_end = if now_ms < dwell_end {
                         (now_ms + 150).min(dwell_end)
@@ -2199,20 +2468,94 @@ impl Node {
         if settled {
             let mut last_hold_log = 0u128;
             let mut last_repush = 0u128;
-            while !self.peer_material(round) {
+            let mut last_serve = 0u128;
+            // For a PAST round, first material is not enough
+            // (correction 35): close_round_reveals below freezes
+            // the draw denominator from the reveal set present at
+            // the close, and the live nodes closed this round on
+            // the full set. A catching-up node whose hold breaks
+            // on the first served reveal closes on a subset, draws
+            // a different committee, and then refuses the very
+            // blocks and votes that finalized the round — the
+            // epoch-215 catch-up divergence (a node applied the
+            // bundle's rounds yet counted zero votes for them).
+            // So for past rounds the hold ends only after the
+            // material has been present and quiet for a settle
+            // window, giving the rest of the served set time to
+            // land — the same settle the anchor exception uses.
+            // Live rounds keep the first-material rule: their set
+            // is still being written, by all of us, in real time.
+            //
+            // The settle is QUIESCENCE, not first-arrival
+            // (correction 35, F8): the 1.5 s first-material settle
+            // still lost the epoch-215 re-anchor — a peer's BLOCK
+            // for round 3440 reached node2 a full re-publish tick
+            // before the same peer's REVEAL for 3440, so node2
+            // closed on an empty participant set (committee []),
+            // NULL-finalized the round on skip attestations, and
+            // finality-forked against node3, which had closed on
+            // the full set and finalized the block. Blocks and
+            // reveals travel independently; only a quiet window
+            // longer than the 5 s re-publish tick — restarted by
+            // ANY change in the round's material — lets the whole
+            // set land before the freeze.
+            let mut quiet_since: Option<u128> = None;
+            let mut last_sig: Option<u64> = None;
+            let mut last_sig_check = 0u128;
+            loop {
                 let now_ms = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_millis())
                     .unwrap_or(0);
-                if now_ms >= last_hold_log + 15_000 {
-                    println!(
-                        "HOLD round {round}: no peer material — refusing to close this round on my own reveals alone"
-                    );
-                    last_hold_log = now_ms;
+                if self.peer_material(round) {
+                    if round_end <= now_ms {
+                        if now_ms >= last_sig_check + 1_000 {
+                            last_sig_check = now_ms;
+                            let sig = self.round_material_count(round);
+                            if last_sig != Some(sig) {
+                                last_sig = Some(sig);
+                                quiet_since = Some(now_ms);
+                            }
+                        }
+                        match quiet_since {
+                            Some(s) if now_ms >= s + 6_000 => break,
+                            _ => {}
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    quiet_since = None;
+                    last_sig = None;
+                    if now_ms >= last_hold_log + 15_000 {
+                        println!(
+                            "HOLD round {round}: no peer material — refusing to close this round on my own reveals alone"
+                        );
+                        last_hold_log = now_ms;
+                    }
                 }
                 // Same re-publish as the catch-up dwell: while I
                 // hold, my own reveal for this round may be exactly
-                // the material a peer is holding for.
+                // the material a peer is holding for. Same
+                // re-derive first (correction 35) if a resume past
+                // the collection point left it unrecorded — for
+                // any round not yet finalized HERE (correction 35,
+                // F7): the earlier guard also abstained when peer
+                // history existed, and that abstention let a node
+                // close round 3440 with NO reveal of its own — in
+                // the worst case an empty participant set — while
+                // its peers closed on the full set. My close must
+                // be drawn from a set that includes me; a round
+                // already finalized here is closed history and
+                // abstention there changes nothing.
+                if !observing
+                    && !self.fin.finalized.contains_key(&round)
+                    && self.fin.reveal_of(self.keys.machine(), round).is_none()
+                    && (round as usize) + 1 < CHAIN_LEN
+                {
+                    let link = self.keys.chain_reveal((round + 1) as usize);
+                    let _ = self.fin.submit_reveal(self.keys.machine(), round, link);
+                }
                 if now_ms >= last_repush + 5_000
                     && self.fin.reveal_of(self.keys.machine(), round).is_some()
                     && (round as usize) + 1 < CHAIN_LEN
@@ -2223,6 +2566,12 @@ impl Node {
                         reveal_msg(self.keys.machine(), round, &link, now_ms as u64),
                     );
                     last_repush = now_ms;
+                }
+                // Serve while holding (correction 35), as in the
+                // catch-up dwell.
+                if now_ms >= last_serve + 5_000 {
+                    self.serve_history(round);
+                    last_serve = now_ms;
                 }
                 self.pump_until(now_ms + 150).await;
             }
@@ -2291,55 +2640,7 @@ impl Node {
                 let _ = self.net.publish(TOPIC_VOTES, framed(3, round, &encode_vote(&v)));
             }
         }
-        if round < self.history_until {
-            // Serve from the oldest sync point a recent joiner
-            // announced (rounded to its epoch start), clamped to the
-            // retained-history floor — the joiner processes on its
-            // own clock and lags the publisher's by an epoch or two,
-            // so serving only the publisher's current epoch strands
-            // it with subset committees and a solo fork.
-            let floor = round.saturating_sub(HISTORY_RETENTION_EPOCHS * rpe);
-            let from = match self.catchup_from {
-                Some(h) => (h - (h % rpe)).max(floor),
-                None => round - (round % rpe),
-            };
-            let machines: Vec<u64> = self.announcements.keys().copied().collect();
-            // Walk the range in slices of SERVE_SLICE_ROUNDS rounds
-            // per round: the full range every round is thousands of
-            // republishes and floods slow peers' queues; a joiner
-            // cycling the slices still receives every round within a
-            // few rounds. The slice size sets the catch-up speed
-            // limit: a joiner can only process rounds whose slice has
-            // come around, so its pace is slice × (server rounds per
-            // full cycle)⁻¹. At 16 rounds/slice a 1,100-round backlog
-            // cycled in ~69 server rounds and the joiner replayed at
-            // ~5 rounds/min against a 20 rounds/min wall clock — the
-            // backlog GREW (measured 2026-11-14). At 64 the same
-            // backlog cycles in ~18 server rounds and the joiner
-            // sustains ~70 rounds/min, comfortably ahead of the wall.
-            let cur = if self.serve_cursor < from || self.serve_cursor >= round {
-                from
-            } else {
-                self.serve_cursor
-            };
-            let end = (cur + SERVE_SLICE_ROUNDS).min(round);
-            self.serve_cursor = end;
-            for r in cur..end {
-                for b in self.fin.dag.blocks().into_iter().filter(|b| b.round == r) {
-                    let _ = self.net.publish(TOPIC_BLOCKS, framed(2, round, &encode_block(&b)));
-                }
-                for m in &machines {
-                    if let Some(link) = self.fin.reveal_of(*m, r) {
-                        let _ = self
-                            .net
-                            .publish(TOPIC_BLOCKS, reveal_msg(*m, r, &link, round));
-                    }
-                }
-                for v in self.fin.votes_in_round(r) {
-                    let _ = self.net.publish(TOPIC_VOTES, framed(3, round, &encode_vote(&v)));
-                }
-            }
-        }
+        self.serve_history(round);
 
         if !observing && !self.fin.is_revoked(self.keys.machine()) {
             // My reveal for NEXT round, collected during this one.
@@ -2464,7 +2765,26 @@ impl Node {
         // My vote — for the PREVIOUS round. The one-round lag means
         // every honest node votes on a converged view of that round's
         // blocks, as in the Step-4 simnet's delayed delivery.
-        if round >= 1 && !observing {
+        // Observing normally suppresses the vote (a node that
+        // observed its resume round has a stale view and must not
+        // claim) — with one exception (correction 35): when the
+        // observation is THIS round's gate failing on the missing
+        // anchor (round − 2 unfinalized), the vote below is the
+        // only carrier of the cure. Its skip field attests exactly
+        // that anchor round, per the liveness design: the members
+        // of the next committee witness that the stalled round
+        // closed empty. Before this exception the attestation was
+        // unreachable — the gate's failure set observing, observing
+        // suppressed the vote, and the stalled round could never
+        // be attested (the epoch-215 stall: a 1–1 vote split on
+        // round 3446 sat for an hour while both voters repeatedly
+        // observed round 3448 and cast nothing). The exception is
+        // safe: the vote is this node's first claim for the target
+        // round (the voted-set check below still applies), and an
+        // attestation against a round that has in fact finalized
+        // elsewhere is inert at counting time, by the precedence
+        // rule.
+        if round >= 1 && (!observing || !settled) {
             let target_round = round - 1;
             if !self.voted.contains(&target_round) {
                 self.voted.insert(target_round);
@@ -2538,6 +2858,64 @@ impl Node {
         self.pump_until(round_end).await;
         self.flush_reveals();
         self.drain_votes();
+
+        // Correction 35 (F6): if this round's gate failed on a past
+        // round's missing anchor, do not abandon the round to the
+        // orbit. In catch-up every deadline is already past, so the
+        // gate gives up instantly and the counter free-runs ahead —
+        // and once it does, every re-delivery mechanism (serve
+        // slices, healing re-publish) switches off, because both are
+        // keyed to the counter. The node then orbits a stall
+        // forever, pumping nothing (the epoch-215 wedge: node2
+        // missed node3's round-3440 material while loading, and no
+        // mechanism ever re-offered it). Park here instead —
+        // pumping, draining and serving on the F1 ticks — until the
+        // anchor lands or the bound expires. The skip-carrier vote
+        // for round − 1 was cast above, BEFORE this park, so a round
+        // that can only be freed by attestation is not starved by
+        // the park (the failure mode of the reverted F3 gate park,
+        // which parked before the vote step). Peers parked the same
+        // way serve the material that frees this node, and vice
+        // versa: the mesh ratchets forward round by round instead
+        // of orbiting.
+        if round >= 2 && !settled {
+            let anchor = round - 2;
+            if !self.fin.finalized.contains_key(&anchor) {
+                let park_start = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                let mut last_serve = 0u128;
+                let mut last_log = 0u128;
+                while !self.fin.finalized.contains_key(&anchor) {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    if now_ms - park_start >= 120_000 {
+                        break;
+                    }
+                    self.pump_until(now_ms + 150).await;
+                    let buffered = std::mem::take(&mut self.buffered_blocks);
+                    for b in buffered {
+                        if !self.propose_guarded(b.clone()) && b.round >= round {
+                            self.buffered_blocks.push(b);
+                        }
+                    }
+                    self.drain_votes();
+                    if now_ms - last_serve >= 5_000 {
+                        last_serve = now_ms;
+                        self.serve_history(round);
+                    }
+                    if now_ms - last_log >= 15_000 {
+                        last_log = now_ms;
+                        println!(
+                            "PARK round {round}: waiting for the finalized block of round {anchor}"
+                        );
+                    }
+                }
+            }
+        }
         self.apply_finalized()?;
         if std::env::var_os("POE_DEBUG").is_some() {
             let tally: Vec<String> = if round >= 1 {

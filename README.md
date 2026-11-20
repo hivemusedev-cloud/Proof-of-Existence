@@ -987,3 +987,123 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     matching proof reply) is generated, self-checked
     through the app surface, and delivered with 0.6.0;
     the on-device run is the owner's.
+
+35. **Mesh re-drive: the catch-up wedge, the skip-wiring
+    bug, and the sync-round contract** (2026-11-20). The
+    local three-node mesh was stood back up to produce the
+    first live epoch closes on the bounded-DAG binary. It
+    wedged at round 3361 and, across a night of diagnosis,
+    exposed a stack of implementation defects — all in the
+    node's round-driving and sync code; no consensus or
+    money rule changed. (a) **Skip attestation was
+    unreachable end-to-end**: votes lag one round, so the
+    attestation for a stalled round r rides the vote cast
+    during process_round(r+2) — whose finality gate fails
+    on exactly r, sets the node observing, and observing
+    suppressed the vote. poe-finality and the Lean proof
+    were always correct; the simnet_skip battery drives
+    the engine directly and could not see the wiring. The
+    gate is unchanged; the vote step now casts despite
+    observing when the observation is this round's own
+    gate failure — the vote is the cure's only carrier,
+    and an attestation against a round finalized elsewhere
+    is inert at counting time. First live proof hours
+    later: `NULL round=3446 closed empty by skip
+    attestation`, on both live nodes. (b) **Buffers starved
+    every hold**: blocks/votes that arrived during a dwell
+    or hold sat in their buffers, retried only at the gate
+    or round end — the node never admitted the material it
+    was waiting for. pump_until now drains both on every
+    pump. (c) **Serve starvation**: history was served
+    only from the per-round serve block, which a parked
+    node's counter never reaches; serving now also ticks
+    inside the dwell and the settled-hold. (d) **Orbit**:
+    for a past round the gate gives up instantly (its vote
+    point is gone), so a node behind on material but ahead
+    on counter free-ran, switching off every re-delivery
+    mechanism keyed to the counter. A bounded end-of-round
+    PARK (pump + drain + serve) now holds the node at a
+    failed gate; the skip-carrier vote is cast before the
+    park, so the park cannot starve the attestation (an
+    earlier gate-park attempt was reverted for doing
+    exactly that, and is not shipped). (e) **Resume reveal
+    starvation**: a node that resumed past a round's
+    collection point held no reveal of its own for it, so
+    its hold re-publish silently never fired while a peer
+    held the round for exactly that reveal; both hold
+    loops now re-derive the deterministic reveal for any
+    round not yet finalized locally. (f) **Subset closes**:
+    close_round_reveals freezes the participant set from
+    whatever has arrived; in catch-up a node closed rounds
+    on subsets (in the worst case empty — a committee of
+    nobody, and once a committee of one that NULL-finalized
+    a round on its own attestation while its peers
+    finalized the block: a finality fork at the close).
+    The settled-hold's settle for past rounds is now
+    QUIESCENCE — a 6 s window, longer than the 5 s
+    re-publish tick, restarted by any change in the
+    round's material — because blocks and reveals travel
+    independently and a peer's block beat its reveal by a
+    full tick. (g) **The sync-round contract**: bundles
+    carry the base snapshot only (by design — no working
+    state), but the snapshot's finalized map silently
+    included rounds at/after the sync point when the
+    maker's epoch close ran late, so two bundles for the
+    same epoch disagreed about the sync round's finality
+    and joiners forked by bundle choice. write_bundle now
+    truncates finalized to the sync point; every joiner
+    decides the sync round with the mesh. (h) **The anchor
+    exception asked the wrong question**: it fired only
+    when NO peer material existed, but bundles carry stale
+    blocks for the anchor round while its reveals were
+    collected by nobody — the blocks satisfied the material
+    test, every node stayed observing, and the round closed
+    empty. The exception now fires when no peer REVEAL has
+    landed after a full re-publish cycle, blocks or not.
+    Live results on the fixed binary: an operator
+    re-anchor from the epoch-214 bundle (the design's
+    stated recovery; the forked tails were preserved on
+    disk, not deleted) produced the mesh's first live
+    epoch closes since the bounded-DAG rebuild — CLOSE /
+    PRUNE / CERT for epochs 210–214 (epoch 210: PRUNE
+    dropped=6268 retained=35; CERT votes=2) — and, in the
+    final run from one identical bundle on all three
+    nodes, unanimous agreement on every finalized round:
+    round 3440 NULL by 3/3 skip attestation (the anchor
+    round, never collected, re-collected by all three),
+    round 3441 by 3/3 tally on one block. One liveness gap
+    remains, stated plainly: node2's own reveal for round
+    3443 is missing from its own close (an observing
+    suppression not yet pinned to its exact line), so its
+    committee view for 3443 differs by one member, it never
+    cast the 3443 vote the other two nodes' tallies wait
+    on, and the mesh was stopped — consistent everywhere
+    through round 3441, node2 two rounds ahead, no
+    conflicting finality anywhere — rather than left to
+    drift. Also added: `poe-node finstate-dump <file>
+    [from] [to]`, a read-only diagnostic that prints
+    committees, tallies and voters from a finstate file;
+    the night's diagnoses stand on its output. The
+    standalone items left open in correction 33 are also
+    resolved here: D4 and D5 were ONE root cause — the
+    image's rootfs carried directories stamped mode 02770
+    root:nogroup (a sandbox artifact of the build), so
+    every dedicated-user service failed at exec (203/EXEC)
+    while root services and the root-run first boot worked;
+    the build now normalizes directory modes and asserts
+    none remain. systemd-resolved additionally failed on
+    mount namespacing against the read-only root (226/
+    NAMESPACE); it is masked in the image — name resolution
+    is not a node dependency (peers are IP multiaddrs,
+    updates are local signed manifests) — recorded as a
+    design disposition, not a silent fix. D7: the baked
+    unit plain-started the node, which refuses an empty
+    data dir; a start script now mirrors the host rule
+    (sync from the staged bundle iff no store exists). The
+    final default (non-diagnostic) build was made the same
+    night and its end-state boot verification PASSED
+    (identity created in the guest, bundle synced, control
+    socket up, finstate written — BUILD_REPORT.md final
+    addendum); the guest's 600 s health-check deadline is
+    a real-hardware parameter and is not inflated to fit
+    the emulator, under which the cold load exceeds it.
