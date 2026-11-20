@@ -707,3 +707,31 @@ correction-35 binary: see the 2026-11-20 test logs under
 ~/workspace/poe-build-2026-11-11/test-logs-2026-11-20/.
 Railway unchanged (bundle-URL flip still the owner's
 dashboard action, rested).
+
+## Ops entry 2026-11-20 (later) — correction 36: the 215 stall fixed, soak begins
+
+Correction 35 was pushed first (main 933ba351 → 7ef0bfd6,
+Railway redeploy accepted by the owners). The 215 fix
+followed: in crates/poe-node/src/testnet.rs, the
+settled-hold's reveal re-derive no longer abstains while
+the node is observing (the exact suppression behind
+node2's missing round-3443 reveal). Release build clean,
+poe-node tests 10/10. The stalled states were preserved
+as finstate.bin.pre-fix36-2026-11-20 /
+store.pre-fix36-2026-11-20 and all three nodes were
+re-anchored from the same identical epoch-214 bundle
+(md5 1cef48288f58a5e85f517b266e99574c on all three) under
+transient units poe-rec1/2/3, node1 not peered to
+Railway. Result: epoch 215 closed on all three nodes
+under one root (0c7d7e0dd068580b, CERT close_round=3455),
+then 216 (6a7124fd87e0d7c1) and 217; cert-215.bin and
+cert-216.bin on disk on all three; finstate dumps
+identical in their finalized entries through round 3455;
+round 3443 — the stalled round — finalized as block
+2fbcb390d76de137 on all three. Minted unchanged
+(300000000399999) throughout. The mesh was left running:
+the Stage 2 soak starts from this verified state. No
+PRUNE lines at the 215/216 closes: the prune call logs
+only when it drops, and the 215 anchor round (3440)
+finalized NULL, so there was no block anchor to prune
+from; earlier live PRUNE lines stand at epochs 210–214.

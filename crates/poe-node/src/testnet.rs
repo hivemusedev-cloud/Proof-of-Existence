@@ -2548,8 +2548,26 @@ impl Node {
                 // be drawn from a set that includes me; a round
                 // already finalized here is closed history and
                 // abstention there changes nothing.
-                if !observing
-                    && !self.fin.finalized.contains_key(&round)
+                //
+                // Observing does NOT abstain here (correction 36):
+                // in the final correction-35 run, node2 resumed
+                // inside its observe window and reached this hold
+                // for round 3443 with no reveal of its own
+                // recorded; the observing guard suppressed the
+                // re-derive, it closed 3443 with a committee
+                // missing itself, and the 3443 vote the other
+                // nodes' full committee waited on was never cast —
+                // a stall, not a fork (epoch 215 never closed).
+                // A reveal is not a claim: it is this node's
+                // deterministic chain link, and the re-publish
+                // tick below already publishes it while observing
+                // whenever it exists — only its creation was
+                // suppressed. What observing abstains from is
+                // proposing, voting and heartbeats, not from
+                // being counted in its own close. (The catch-up
+                // dwell keeps its abstention: there the anchor
+                // exception owns the observing late reveal.)
+                if !self.fin.finalized.contains_key(&round)
                     && self.fin.reveal_of(self.keys.machine(), round).is_none()
                     && (round as usize) + 1 < CHAIN_LEN
                 {

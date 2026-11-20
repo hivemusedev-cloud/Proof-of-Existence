@@ -1107,3 +1107,34 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     addendum); the guest's 600 s health-check deadline is
     a real-hardware parameter and is not inflated to fit
     the emulator, under which the cold load exceeds it.
+36. **The 215 stall, pinned and fixed (2026-11-20):**
+    correction 35's one open liveness gap is closed. The
+    settled-hold's reveal re-derive (item F7 of correction
+    35) abstained while the node was observing; a node that
+    resumed inside its observe window reached the hold for
+    a round with no reveal of its own recorded, closed the
+    round with a committee missing itself, and never cast
+    the vote the other nodes' full committee waited on —
+    round 3443 in the correction-35 run, which stalled
+    epoch 215. Observing no longer suppresses the re-derive
+    in the settled-hold: a reveal is the node's
+    deterministic chain link, not a claim, and the hold's
+    re-publish tick already published it while observing
+    whenever it existed — only its creation was suppressed.
+    Observing still abstains from proposing, voting and
+    heartbeats; the catch-up dwell keeps its abstention
+    (there the anchor exception owns the observing late
+    reveal). Verified live the same day: re-anchored from
+    the same identical epoch-214 bundle (md5 1cef4828…),
+    the mesh closed epoch 215 on all three nodes under one
+    root (0c7d7e0d…), then 216 (6a7124fd…) and 217, with
+    certificates 215/216 written on all three and finstate
+    dumps identical in their finalized entries — and round
+    3443 itself finalized as a block (2fbcb390…) on all
+    three, the exact round that stalled. The mesh was left
+    running as the Stage 2 soak. Finding 14 stays in
+    AUDIT_PACKAGE.md by the owners' instruction: the fixed
+    behaviour is what the mesh now does, and the deep
+    question — how a catching-up node proves its reveal
+    set complete before freezing it — remains the
+    auditors'.

@@ -251,7 +251,9 @@ the operator, fixed 2026-11-14 with regression tests:
     same class: state a format claims not to carry, carried
     anyway at a boundary.
 14. **Catch-up subset closes (safety, found 2026-11-20;
-    mitigations in, one liveness gap open).** close_round_reveals
+    mitigations in; the one liveness gap was pinned and
+    fixed the same day — README correction 36 — and the
+    general question below stays open for the audit).** close_round_reveals
     freezes a round's participant set from whatever has arrived
     locally. In catch-up (all deadlines past) nodes closed on
     subsets: divergent committees for round 3361 that no message
@@ -267,15 +269,24 @@ the operator, fixed 2026-11-14 with regression tests:
     blocks, an end-of-round park replacing the catch-up orbit,
     and finding 13's truncation. With them, a three-node
     re-anchor from one identical bundle agreed unanimously on
-    every finalized round. One liveness gap remains open: a
-    node's own reveal can still be missing from its own close
-    (an observing suppression not yet pinned to its line), which
-    desynchronized one committee view by one member and left a
-    round one vote short — a stall, not a fork, in the observed
-    instance. The general question — how a catching-up node
-    proves its reveal set complete before freezing it — is
-    named here for the audit; the mitigations are timing-based,
-    and the operators do not claim they are a proof.
+    every finalized round. The one liveness gap those
+    mitigations left — a node's own reveal missing from its
+    own close, desynchronizing one committee view by one
+    member and leaving a round one vote short (a stall, not
+    a fork) — was pinned to the settled-hold's reveal
+    re-derive, which abstained while the node was observing,
+    and fixed (README correction 36): observing no longer
+    suppresses a node's own reveal in the settled-hold. On
+    the fixed binary, a re-anchor from the same identical
+    bundle closed epochs 215, 216 and 217 on all three nodes
+    with identical roots, and the exact round that had
+    stalled (3443) finalized as a block on all three. The
+    general question — how a catching-up node proves its
+    reveal set complete before freezing it — is named here
+    for the audit and stays open by the owners' instruction:
+    the auditors get the deep question and the fixed
+    behaviour. The mitigations are timing-based, and the
+    operators do not claim they are a proof.
 
 An auditor should re-derive each of these from the code and the
 issue history rather than trusting this summary, and should look
