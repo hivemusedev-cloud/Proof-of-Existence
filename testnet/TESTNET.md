@@ -761,3 +761,50 @@ over gossip, where bundle starts carry the historical
 set of 8. The soak clock restarts from the epoch-219
 close (~20:1x +06), mesh left running, node1 not
 peered to Railway (peering remains the owner's call).
+
+## Ops entry 2026-11-21 — epoch-234 stall diagnosed, correction 38, re-anchor; soak not yet resumed
+
+The mesh stalled in live operation ~21:22 +06 on
+2026-11-20, ~20 minutes after epoch 233 closed (root
+7cf756f16c7cb35b) — before any VM wipe. The soak guard
+caught eight replacement wipes overnight and relaunched
+the mesh each time; every relaunch restored the
+identical stall (fin 3750/3749/3749, rounds PARKing at
+the frontier), which settled that the stall lived in
+the resumed state. Diagnosis authorized 2026-11-21:
+finstate dumps from all three nodes (rounds 3749–3763)
+plus a cross-submission probe pinned the chain —
+(1) one node's reveal for round 3677 was lost in
+collection at both peers and aged out of every
+persisted working state; its single-parent block
+segment (rounds 3677–3750, 75 blocks) was judged
+BadReveal at the root and never re-offered, because
+serve_history's range began at the lagging peer's sync
+hint (3744), far above the gap (3677); (2) round
+3749's committee split 1–1, and the skip attestation
+it needed from the third member rode a vote for a
+segment block — unlandable, buffered in memory, and
+evaporated in the 21:57 wipe; the caster's persisted
+re-cast carries no attestation (AUDIT_PACKAGE
+finding 16). Correction 38 (serve the full retained
+range to a lagging peer; re-derive the node's own
+reveals when serving rounds it proposed in) shipped
+and verified live: the segment landed 75/75 at both
+peers and the aged vote was delivered and accepted —
+but the attestation itself no longer exists anywhere,
+so on the owners' dumps-argue-for-it condition the
+mesh was re-anchored from the epoch-233 bundles
+(synchronized, one identical bundle — node1's, md5
+a78492e5… — on all three; the diverged post-anchor
+states are preserved as *.post-anchor-2026-11-21, the
+stalled states as *.pre-fix38-2026-11-21). Post-anchor
+the frontier is gate-blocked by the vote-timing defect
+in finding 17 (a vote step reached before its target
+block exists spends the round's vote for that run).
+As of this entry: epoch 234 has NOT closed, verified
+closes stand at epochs 219–233, minted unchanged
+(300000000399999), the mesh is left running on the
+correction-38 binary (local-only, node1 not peered to
+Railway), the soak guard keeps its standing orders,
+and the soak clock remains stopped at the epoch-233
+close pending the owners' call on the finding-17 fix.

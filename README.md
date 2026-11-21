@@ -1168,3 +1168,57 @@ cargo run -p poe-node -- testnet --dir <dir> --peer <multiaddr>  # join the test
     followed (492e5ae4…), certificates on all three. The
     soak restarts from this state. AUDIT_PACKAGE
     finding 15.
+38. **The epoch-234 stall: an aged-out reveal, and what it
+    exposed (2026-11-21):** the soak mesh stalled in live
+    operation at round 3749, ~20 minutes after epoch 233
+    closed; eight soak-guard relaunches after VM
+    replacements restored the identical stall, which
+    finstate dumps from all three nodes then pinned.
+    During the correction-37 run one node's reveal for
+    round 3677 was lost in that round's collection window
+    at both peers; the round closed without it. That
+    node's blocks parent its own previous block, so its
+    rounds 3677–3750 formed a single-parent segment whose
+    root every peer judged BadReveal forever: a proposal
+    is refused when the proposer's reveal for the block's
+    own round is not recorded at the receiver. The
+    buffered segment was then discarded piecemeal by the
+    past-round retry filters, serve_history never
+    re-offered it (its range started at the lagging peer's
+    sync hint — round 3744 — while the gap sat at 3677),
+    and the missing reveal aged out of every node's
+    persisted working state, including its owner's. The
+    stall surfaced 72 rounds later, when round 3749's
+    split committee made finality depend on a vote whose
+    block sat atop the segment. Fix (this correction):
+    when any peer is behind, serve_history serves the
+    full retained range from the retention floor instead
+    of the hint's epoch; and when serving a round in
+    which the node itself holds a block but its reveal
+    is recorded nowhere, the node re-derives the reveal
+    from its keys (a reveal is a deterministic chain
+    link) and records it, so serving always carries the
+    material that makes its blocks judgeable. Verified
+    live: on the fixed binary the whole 75-block segment
+    landed at both peers and the aged vote was delivered
+    and accepted. The stall's last lock was separate and
+    is NOT fixed: the skip attestation round 3749 needed
+    from the third committee member existed only in a
+    vote that was buffered unaccepted and evaporated in
+    a VM wipe; the caster's later re-cast — made after
+    the round had finalized in its own view — carries no
+    attestation by the protocol's own construction rule,
+    so the count is capped at 2/3 permanently
+    (AUDIT_PACKAGE finding 16). On the owners' standing
+    condition (re-anchor only if the dumps argue for it —
+    they did), the mesh was re-anchored from the
+    epoch-233 bundles. Post-anchor, a further liveness
+    defect pinned itself (finding 17): a node that
+    reaches its vote step before the target block has
+    arrived marks the round voted and never re-attempts
+    it in that run, which eats frontier votes in
+    fragmented conditions. As of this writing epoch 234
+    has NOT closed and the soak has NOT resumed; the
+    verified closes stand at epochs 219–233. The
+    vote-timing fix is a separate iteration, the owners'
+    call.

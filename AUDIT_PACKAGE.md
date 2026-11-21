@@ -313,6 +313,72 @@ the operator, fixed 2026-11-14 with regression tests:
     assumptions); the operators note it took a real cold
     restart of the full mesh to expose, as with finding 12.
 
+16. **A skip attestation lost with an unaccepted vote is
+    unrecoverable (liveness, found 2026-11-21; OPEN).**
+    Round 3749's committee split 1–1, so the round could
+    finalize only by skip attestation at 3/3 of the next
+    committee. Two attestations were recorded; the third
+    rode a vote whose block was at the time unlandable at
+    the receivers (finding chain: corrections 35/38 — a
+    segment rooted at a round whose reveal had been lost
+    in collection). The vote sat in the receivers'
+    in-memory buffers and evaporated in a VM replacement.
+    The caster later re-cast its vote for that round —
+    legitimately: a restart re-derives castability from
+    the registries, and its original cast had never
+    persisted — but by then the attested round had
+    finalized in the caster's own view, so the re-cast
+    carries no attestation, by the protocol's own
+    construction rule (an attestation is attached only
+    for a round unfinalized at cast time). The stored
+    vote everywhere is the attestation-free re-cast; the
+    count is capped at 2/3 and the round is permanently
+    unfinalizable in-protocol. The operators also record
+    a local inconsistency the dumps exposed: the caster's
+    own skip tally for the round reads 3/3 and it
+    NULL-finalized the round — it counted its original
+    vote's attestation when first cast, and that count
+    survived in its skip record after its vote store came
+    to hold only the re-cast. A node's skip record and
+    its stored vote can therefore disagree about the same
+    round. The design question for the audit: whether a
+    vote-carried payload that was never accepted anywhere
+    should be re-issuable, and what a re-cast may carry
+    when the caster's finality view has moved past the
+    attested round. Operational consequence taken: the
+    mesh was re-anchored from the last epoch bundle, the
+    design's prescribed recovery, discarding only the
+    unfinalized tail. (The delivery half of the incident
+    — a block segment unlandable for a lost reveal — is
+    fixed: README correction 38.)
+
+17. **A vote step reached before its target block exists
+    spends the round's vote silently (liveness, found
+    2026-11-21; OPEN).** The node's vote step marks the
+    target round voted BEFORE checking committee
+    membership and whether a target block exists in the
+    local DAG. If no block of the target round has
+    arrived yet — routine when a restarted node marches
+    through past rounds faster than serve cycles deliver
+    frontier blocks — the vote is never cast, yet the
+    round stays marked voted for the rest of the run, and
+    no loop (dwell, hold, park) re-attempts it. A restart
+    re-derives castability from the registries, but the
+    resumed node reaches its vote step within seconds
+    while the serve cycle that carries the target block
+    takes minutes, so fragmented runs lose frontier votes
+    round after round. Observed live after the epoch-233
+    re-anchor: two of three nodes never cast their
+    round-3745 votes in run after run, leaving the anchor
+    round's skip count short and the frontier gate-blocked
+    (README correction 38). Candidate fix direction, not
+    yet taken: mark the round voted only when a vote is
+    actually cast, and/or re-attempt uncast frontier votes
+    in the waiting loops. The operators flag the interplay
+    with the correction-35 vote exception (voting despite
+    an unsettled gate), whose safety argument rests on the
+    vote being the node's first claim for the round.
+
 An auditor should re-derive each of these from the code and the
 issue history rather than trusting this summary, and should look
 for the same classes (arrival-order dependence, resume-state

@@ -2201,7 +2201,22 @@ impl Node {
             // it with subset committees and a solo fork.
             let floor = round.saturating_sub(HISTORY_RETENTION_EPOCHS * rpe);
             let from = match self.catchup_from {
-                Some(h) => (h - (h % rpe)).max(floor),
+                // Correction 38: a lagging peer's gap is NOT bounded
+                // by its sync hint. The hint names the first round
+                // the peer has not APPLIED; the material it is
+                // missing can be far older — judging material (a
+                // proposer's reveal) lost in a long-closed round's
+                // collection window, which surfaces only when a
+                // much later round's finality depends on a block
+                // chained to that round. The epoch-234 stall: the
+                // peers' hint read 3749 while the actual gap was a
+                // round-3677 reveal, and serving from the hint's
+                // epoch (3744) never offered it — eight cold
+                // resumes restored the identical stall. When any
+                // peer is behind, serve the full retained range
+                // from the floor; the slice cycle below bounds the
+                // republication rate exactly as before.
+                Some(_) => floor,
                 None => round - (round % rpe),
             };
             let machines: Vec<u64> = self.announcements.keys().copied().collect();
@@ -2228,6 +2243,38 @@ impl Node {
             for r in cur..end {
                 for b in self.fin.dag.blocks().into_iter().filter(|b| b.round == r) {
                     let _ = self.net.publish(TOPIC_BLOCKS, framed(2, round, &encode_block(&b)));
+                }
+                // Correction 38: my own reveal for a round I
+                // proposed in may be recorded NOWHERE — not at a
+                // peer (lost in that round's collection window)
+                // and, once the round's working state has aged
+                // out of the snapshot window, not even here.
+                // Without it no peer can ever judge my block for
+                // that round (propose answers BadReveal), and
+                // because my blocks parent my own previous block,
+                // one lost reveal strands my whole later chain as
+                // an unlandable segment — the epoch-234 stall,
+                // where a round-3677 reveal missing at both peers
+                // surfaced 72 rounds later as a skip deadlock no
+                // resume could heal. A reveal is a deterministic
+                // chain link, not a claim: re-derive it from my
+                // keys (the same derivation the dwell/hold
+                // re-derive uses at the frontier) for any served
+                // round in which I hold a block and the reveal is
+                // unrecorded, so serving always carries the
+                // material that makes my blocks judgeable.
+                let me_id = self.keys.machine();
+                if self.fin.reveal_of(me_id, r).is_none()
+                    && (r as usize) + 1 < CHAIN_LEN
+                    && self
+                        .fin
+                        .dag
+                        .blocks()
+                        .iter()
+                        .any(|b| b.round == r && b.machine == me_id)
+                {
+                    let link = self.keys.chain_reveal((r + 1) as usize);
+                    let _ = self.fin.submit_reveal(me_id, r, link);
                 }
                 for m in &machines {
                     if let Some(link) = self.fin.reveal_of(*m, r) {
